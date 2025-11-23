@@ -55,6 +55,10 @@ class WaveNodeOut(BaseModel):
     degree: int | None = None
     swing_start: int
     swing_end: int
+    start_price: float | None = None
+    end_price: float | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
     children: list["WaveNodeOut"] = Field(default_factory=list)
 
 

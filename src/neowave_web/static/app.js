@@ -139,8 +139,15 @@ function buildWavePath(tree) {
   };
   walk(tree);
   const filtered = points.filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value));
-  filtered.sort((a, b) => a.time - b.time);
-  return filtered;
+  const dedupByTime = new Map();
+  filtered.forEach((p) => {
+    // keep the last value for a given timestamp to avoid duplicates that break lightweight-charts
+    dedupByTime.set(p.time, p.value);
+  });
+  const deduped = Array.from(dedupByTime.entries())
+    .map(([time, value]) => ({ time, value }))
+    .sort((a, b) => a.time - b.time);
+  return deduped;
 }
 
 function initChart() {
@@ -344,8 +351,12 @@ function drawProjection(scenario) {
     projectionSeries.setData([]);
     return;
   }
-  const proj = scenario.details && scenario.details.projection;
-  const waveTree = scenario.details && scenario.details.wave_tree;
+  if (!scenario.details || !scenario.details.projection || !scenario.details.wave_tree) {
+    projectionSeries.setData([]);
+    return;
+  }
+  const proj = scenario.details.projection;
+  const waveTree = scenario.details.wave_tree;
   if (!proj || !waveTree || waveTree.end_price == null || !waveTree.end_time) {
     projectionSeries.setData([]);
     return;
@@ -496,6 +507,7 @@ async function loadData() {
 
     renderCandles();
     if (waveSeries) waveSeries.setData([]);
+    if (projectionSeries) projectionSeries.setData([]);
     clearWaveBoxes();
     renderBaseSwingMarkers();
     renderScenariosList();
