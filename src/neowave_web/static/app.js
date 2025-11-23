@@ -99,6 +99,54 @@ function flattenWaveMarkers(tree, depth = 0, markers = []) {
   return markers;
 }
 
+function buildPathFromWaveTree(tree) {
+  if (!tree) return [];
+  const points = [];
+  const startTime = toUnixSeconds(tree.start_time);
+  const startPrice = Number(tree.start_price);
+  if (Number.isFinite(startTime) && Number.isFinite(startPrice)) {
+    points.push({ time: startTime, value: startPrice });
+  }
+  const children = Array.isArray(tree.sub_waves) ? tree.sub_waves : Array.isArray(tree.children) ? tree.children : [];
+  children.forEach((child) => {
+    const t = markerTimeFromNode(child);
+    const v = Number(child.end_price ?? child.price_high ?? child.price_low ?? child.start_price);
+    if (Number.isFinite(t) && Number.isFinite(v)) {
+      points.push({ time: t, value: v });
+    }
+  });
+  const dedup = new Map();
+  points.forEach((p) => {
+    dedup.set(p.time, p.value);
+  });
+  return Array.from(dedup.entries())
+    .map(([time, value]) => ({ time, value }))
+    .sort((a, b) => a.time - b.time);
+}
+
+function buildPathFromSwings(swings, labels) {
+  if (!Array.isArray(swings) || !swings.length) return [];
+  const path = [];
+  const first = swings[0];
+  const startTime = Number(first.start_ts);
+  const startPrice = Number(first.start_price);
+  if (Number.isFinite(startTime) && Number.isFinite(startPrice)) {
+    path.push({ time: startTime, value: startPrice });
+  }
+  swings.forEach((swing) => {
+    const t = Number(swing.end_ts);
+    const v = Number(swing.end_price);
+    if (Number.isFinite(t) && Number.isFinite(v)) {
+      path.push({ time: t, value: v });
+    }
+  });
+  const dedup = new Map();
+  path.forEach((p) => dedup.set(p.time, p.value));
+  return Array.from(dedup.entries())
+    .map(([time, value]) => ({ time, value }))
+    .sort((a, b) => a.time - b.time);
+}
+
 function buildMarkersFromNodes(nodes) {
   if (!Array.isArray(nodes)) return [];
   return nodes
@@ -400,10 +448,7 @@ function highlightScenario(scenario) {
     if (!markers.length) {
       markers = flattenWaveMarkers(waveTree);
     }
-    const path = markers
-      .map((m) => ({ time: m.time, value: Number(m.value) }))
-      .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value))
-      .sort((a, b) => a.time - b.time);
+    const path = buildPathFromWaveTree(waveTree);
     if (waveSeries) waveSeries.setData(path);
     candleSeries.setMarkers(markers);
   } else {
@@ -422,10 +467,7 @@ function highlightScenario(scenario) {
       }))
       .filter((m) => Number.isFinite(m.time) && Number.isFinite(m.value));
     candleSeries.setMarkers(markers);
-    const path = markers
-      .map((m) => ({ time: m.time, value: Number(m.value) }))
-      .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value))
-      .sort((a, b) => a.time - b.time);
+    const path = buildPathFromSwings(subset, labelsFromScenario);
     if (waveSeries) waveSeries.setData(path);
   }
   drawInvalidations(scenario.invalidation_levels);
