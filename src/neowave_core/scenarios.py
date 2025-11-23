@@ -3,9 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Sequence
 
-from neowave_core.patterns.flat import is_flat
-from neowave_core.patterns.impulse import is_impulse
-from neowave_core.patterns.zigzag import is_zigzag
+from neowave_core.patterns import (
+    is_double_three,
+    is_flat,
+    is_impulse,
+    is_terminal_impulse,
+    is_triangle,
+    is_triple_three,
+    is_zigzag,
+)
 from neowave_core.swings import Direction, Swing
 
 
@@ -33,55 +39,124 @@ def generate_scenarios(
     """Scan swing windows and produce ranked pattern scenarios."""
     scenarios: list[dict[str, Any]] = []
     impulse_rules = rules.get("Impulse", {}).get("TrendingImpulse", {})
+    terminal_rules = rules.get("Impulse", {}).get("TerminalImpulse", {})
     zigzag_rules = rules.get("Corrections", {}).get("Zigzag", {})
     flat_rules = rules.get("Corrections", {}).get("Flat", {})
+    triangle_rules = rules.get("Corrections", {}).get("Triangle", {})
+    combination_rules = rules.get("Corrections", {}).get("Combination", {})
 
-    for idx in range(len(swings) - 4):
-        window = swings[idx : idx + 5]
-        result = is_impulse(window, impulse_rules)
-        if result.score <= 0:
-            continue
-        direction = Direction.UP if window[0].direction == Direction.UP else Direction.DOWN
+    def add_scenario(
+        pattern_type: str,
+        score: float,
+        swing_indices: tuple[int, int],
+        summary: str,
+        invalidation: dict[str, float],
+        details: dict[str, Any] | None = None,
+    ) -> None:
         scenarios.append(
             {
-                "pattern_type": f"impulse_{direction.value}",
-                "score": result.score,
-                "swing_indices": (idx, idx + 4),
-                "textual_summary": f"Impulse {direction.value} from {_fmt_time(window[0].start_time)} to {_fmt_time(window[-1].end_time)} (subtype={result.details.get('subtype')})",
-                "invalidation_levels": _invalidation_for_impulse(window, direction),
-                "details": result.details,
+                "pattern_type": pattern_type,
+                "score": score,
+                "swing_indices": swing_indices,
+                "textual_summary": summary,
+                "invalidation_levels": invalidation,
+                "details": details or {},
             }
         )
 
+    # Impulses, terminal impulses, and triangles (5-swing windows).
+    for idx in range(len(swings) - 4):
+        window = swings[idx : idx + 5]
+        direction = Direction.UP if window[0].direction == Direction.UP else Direction.DOWN
+
+        impulse_result = is_impulse(window, impulse_rules)
+        if impulse_result.score > 0:
+            subtype = impulse_result.details.get("subtype")
+            add_scenario(
+                f"impulse_{direction.value}",
+                impulse_result.score,
+                (idx, idx + 4),
+                f"Impulse {direction.value} from {_fmt_time(window[0].start_time)} to {_fmt_time(window[-1].end_time)} (subtype={subtype})",
+                _invalidation_for_impulse(window, direction),
+                impulse_result.details,
+            )
+
+        terminal_result = is_terminal_impulse(window, terminal_rules)
+        if terminal_result.score > 0:
+            add_scenario(
+                f"terminal_impulse_{direction.value}",
+                terminal_result.score,
+                (idx, idx + 4),
+                f"Terminal impulse {direction.value} between {_fmt_time(window[0].start_time)} and {_fmt_time(window[-1].end_time)} (mode={terminal_result.details.get('mode')})",
+                _invalidation_for_impulse(window, direction),
+                terminal_result.details,
+            )
+
+        triangle_result = is_triangle(window, triangle_rules)
+        if triangle_result.score > 0:
+            add_scenario(
+                f"triangle_{triangle_result.details.get('subtype')}_{direction.value}",
+                triangle_result.score,
+                (idx, idx + 4),
+                f"Triangle ({triangle_result.details.get('subtype')}) from {_fmt_time(window[0].start_time)} to {_fmt_time(window[-1].end_time)}",
+                _invalidation_for_correction(window, direction),
+                triangle_result.details,
+            )
+
+    # Three-swing corrections (zigzags, flats).
     for idx in range(len(swings) - 2):
         window = swings[idx : idx + 3]
+        direction = Direction.UP if window[0].direction == Direction.UP else Direction.DOWN
 
         zigzag_result = is_zigzag(window, zigzag_rules)
         if zigzag_result.score > 0:
-            direction = Direction.UP if window[0].direction == Direction.UP else Direction.DOWN
-            scenarios.append(
-                {
-                    "pattern_type": f"zigzag_{direction.value}",
-                    "score": zigzag_result.score,
-                    "swing_indices": (idx, idx + 2),
-                    "textual_summary": f"Zigzag {direction.value} between {_fmt_time(window[0].start_time)} and {_fmt_time(window[-1].end_time)} (subtype={zigzag_result.details.get('subtype')})",
-                    "invalidation_levels": _invalidation_for_correction(window, direction),
-                    "details": zigzag_result.details,
-                }
+            add_scenario(
+                f"zigzag_{direction.value}",
+                zigzag_result.score,
+                (idx, idx + 2),
+                f"Zigzag {direction.value} between {_fmt_time(window[0].start_time)} and {_fmt_time(window[-1].end_time)} (subtype={zigzag_result.details.get('subtype')})",
+                _invalidation_for_correction(window, direction),
+                zigzag_result.details,
             )
 
         flat_result = is_flat(window, flat_rules)
         if flat_result.score > 0:
-            direction = Direction.UP if window[0].direction == Direction.UP else Direction.DOWN
-            scenarios.append(
-                {
-                    "pattern_type": f"flat_{direction.value}",
-                    "score": flat_result.score,
-                    "swing_indices": (idx, idx + 2),
-                    "textual_summary": f"Flat {direction.value} between {_fmt_time(window[0].start_time)} and {_fmt_time(window[-1].end_time)} (subtype={flat_result.details.get('subtype')})",
-                    "invalidation_levels": _invalidation_for_correction(window, direction),
-                    "details": flat_result.details,
-                }
+            add_scenario(
+                f"flat_{direction.value}",
+                flat_result.score,
+                (idx, idx + 2),
+                f"Flat {direction.value} between {_fmt_time(window[0].start_time)} and {_fmt_time(window[-1].end_time)} (subtype={flat_result.details.get('subtype')})",
+                _invalidation_for_correction(window, direction),
+                flat_result.details,
+            )
+
+    # Complex corrections.
+    for idx in range(len(swings) - 6):
+        window = swings[idx : idx + 7]
+        direction = Direction.UP if window[0].direction == Direction.UP else Direction.DOWN
+        double_result = is_double_three(window, combination_rules.get("DoubleThree", {}))
+        if double_result.score > 0:
+            add_scenario(
+                f"double_three_{direction.value}",
+                double_result.score,
+                (idx, idx + 6),
+                f"Double three ({double_result.details.get('w_pattern')} + {double_result.details.get('y_pattern')}) between {_fmt_time(window[0].start_time)} and {_fmt_time(window[-1].end_time)}",
+                _invalidation_for_correction(window, direction),
+                double_result.details,
+            )
+
+    for idx in range(len(swings) - 10):
+        window = swings[idx : idx + 11]
+        direction = Direction.UP if window[0].direction == Direction.UP else Direction.DOWN
+        triple_result = is_triple_three(window, combination_rules.get("TripleThree", {}))
+        if triple_result.score > 0:
+            add_scenario(
+                f"triple_three_{direction.value}",
+                triple_result.score,
+                (idx, idx + 10),
+                f"Triple three ({triple_result.details.get('w_pattern')} + {triple_result.details.get('y_pattern')} + {triple_result.details.get('z_pattern')}) between {_fmt_time(window[0].start_time)} and {_fmt_time(window[-1].end_time)}",
+                _invalidation_for_correction(window, direction),
+                triple_result.details,
             )
 
     scenarios.sort(key=lambda item: item["score"], reverse=True)

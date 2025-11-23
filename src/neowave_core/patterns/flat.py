@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from neowave_core.patterns.common import PatternCheckResult, pattern_direction
+from neowave_core.patterns.common_types import PatternCheckResult, pattern_direction
 from neowave_core.swings import Swing
 
 B_MIN_RATIO = 0.618

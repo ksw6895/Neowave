@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NEoWave Local Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+      :root {
+        --bg: radial-gradient(circle at 20% 20%, #13263b, #0a0f1a 50%);
+        --panel: #0f1729;
+        --accent: #20e3b2;
+        --accent-2: #4cc9f0;
+        --text: #edf0f7;
+        --muted: #97a4c0;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Space Grotesk", "IBM Plex Mono", system-ui, -apple-system, sans-serif;
+        padding: 24px;
+      }
+      .shell {
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+      .brand {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        letter-spacing: 0.4px;
+      }
+      .pill {
+        background: rgba(32, 227, 178, 0.12);
+        color: var(--accent);
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        border: 1px solid rgba(32, 227, 178, 0.3);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 16px;
+      }
+      #chart-panel {
+        background: var(--panel);
+        border-radius: 14px;
+        border: 1px solid rgba(76, 201, 240, 0.14);
+        padding: 12px;
+        box-shadow: 0 20px 70px rgba(0, 0, 0, 0.35);
+      }
+      #chart {
+        height: 520px;
+      }
+      #scenarios {
+        background: var(--panel);
+        border-radius: 14px;
+        border: 1px solid rgba(76, 201, 240, 0.14);
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-height: 560px;
+        overflow-y: auto;
+      }
+      .scenario-card {
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 10px;
+        padding: 10px 12px;
+      }
+      .scenario-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .scenario-score {
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .scenario-body {
+        font-size: 14px;
+        color: var(--text);
+        line-height: 1.4;
+      }
+      .scenario-meta {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .btn {
+        background: linear-gradient(90deg, #20e3b2, #4cc9f0);
+        color: #041020;
+        border: none;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 120ms ease, box-shadow 160ms ease;
+      }
+      .btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 10px 30px rgba(76, 201, 240, 0.35);
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      @media (max-width: 960px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        #chart {
+          height: 360px;
+        }
+        body {
+          padding: 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div class="brand">
+          <div class="pill">Local</div>
+          <div>
+            <div style="font-weight: 600">NEoWave Engine Monitor</div>
+            <div class="muted">OHLCV · Swings · Scenarios</div>
+          </div>
+        </div>
+        <button id="refresh" class="btn">Refresh</button>
+      </header>
+      <div class="grid">
+        <div id="chart-panel">
+          <div id="chart"></div>
+          <div id="chart-hint" class="muted" style="margin-top: 6px">Loading latest data…</div>
+        </div>
+        <aside id="scenarios"></aside>
+      </div>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

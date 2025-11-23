@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Sequence
 
-from neowave_core.patterns.common import PatternCheckResult, is_alternating, pattern_direction
+from neowave_core.patterns.common_types import PatternCheckResult, is_alternating, pattern_direction
 from neowave_core.swings import Direction, Swing
 
 EXTENSION_RATIO = 1.618  # From neowave_rules.json Impulse extension requirement
