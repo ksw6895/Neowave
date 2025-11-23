@@ -104,7 +104,7 @@ function buildWavePath(tree) {
   const pushPoint = (node) => {
     const time = markerTimeFromNode(node);
     const value = Number(node.end_price ?? node.price_high ?? node.price_low ?? node.start_price);
-    if (!time || !Number.isFinite(value)) return;
+    if (!Number.isFinite(time) || !Number.isFinite(value)) return;
     points.push({ time, value });
   };
   const walk = (node) => {
@@ -116,8 +116,9 @@ function buildWavePath(tree) {
     children.forEach((child) => walk(child));
   };
   walk(tree);
-  points.sort((a, b) => a.time - b.time);
-  return points;
+  const filtered = points.filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value));
+  filtered.sort((a, b) => a.time - b.time);
+  return filtered;
 }
 
 function initChart() {
@@ -315,7 +316,7 @@ function drawProjection(scenario) {
   }
   const proj = scenario.details && scenario.details.projection;
   const waveTree = scenario.details && scenario.details.wave_tree;
-  if (!proj || !waveTree || waveTree.end_price == null) {
+  if (!proj || !waveTree || waveTree.end_price == null || !waveTree.end_time) {
     projectionSeries.setData([]);
     return;
   }
@@ -342,8 +343,9 @@ function highlightScenario(scenario) {
 
   drawWaveBoxForScenario(scenario);
 
-  const waveTree = (scenario.details && scenario.details.wave_tree) || scenario.wave_tree;
-  if (waveTree) {
+  const waveTree = scenario.details && scenario.details.wave_tree;
+  const hasWavePrice = waveTree && waveTree.end_price != null && waveTree.end_time;
+  if (waveTree && hasWavePrice) {
     const path = buildWavePath(waveTree);
     if (waveSeries) waveSeries.setData(path);
     const markers = flattenWaveMarkers(waveTree);
