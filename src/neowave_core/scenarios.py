@@ -3,6 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Sequence
 
+from neowave_core.rules_loader import (
+    extract_flat_rules,
+    extract_impulse_rules,
+    extract_terminal_impulse_rules,
+    extract_triangle_rules,
+    extract_zigzag_rules,
+)
 from neowave_core.patterns import (
     is_double_three,
     is_flat,
@@ -44,6 +51,20 @@ def generate_scenarios(
     flat_rules = rules.get("Corrections", {}).get("Flat", {})
     triangle_rules = rules.get("Corrections", {}).get("Triangle", {})
     combination_rules = rules.get("Corrections", {}).get("Combination", {})
+    impulse_params = extract_impulse_rules(impulse_rules)
+    terminal_params = extract_terminal_impulse_rules(terminal_rules)
+    zigzag_params = extract_zigzag_rules(zigzag_rules)
+    flat_params = extract_flat_rules(flat_rules)
+    triangle_params = extract_triangle_rules(triangle_rules)
+    weights = {
+        "impulse": 1.2,
+        "terminal_impulse": 0.9,
+        "triangle": 0.85,
+        "zigzag": 0.75,
+        "flat": 0.75,
+        "double_three": 0.65,
+        "triple_three": 0.55,
+    }
 
     def add_scenario(
         pattern_type: str,
@@ -53,10 +74,14 @@ def generate_scenarios(
         invalidation: dict[str, float],
         details: dict[str, Any] | None = None,
     ) -> None:
+        base = pattern_type.split("_", 1)[0]
+        weight = weights.get(base, 1.0)
+        weighted_score = score * weight
         scenarios.append(
             {
                 "pattern_type": pattern_type,
                 "score": score,
+                "weighted_score": weighted_score,
                 "swing_indices": swing_indices,
                 "textual_summary": summary,
                 "invalidation_levels": invalidation,
@@ -69,7 +94,7 @@ def generate_scenarios(
         window = swings[idx : idx + 5]
         direction = Direction.UP if window[0].direction == Direction.UP else Direction.DOWN
 
-        impulse_result = is_impulse(window, impulse_rules)
+        impulse_result = is_impulse(window, impulse_params)
         if impulse_result.score > 0:
             subtype = impulse_result.details.get("subtype")
             add_scenario(
@@ -81,7 +106,7 @@ def generate_scenarios(
                 impulse_result.details,
             )
 
-        terminal_result = is_terminal_impulse(window, terminal_rules)
+        terminal_result = is_terminal_impulse(window, terminal_params)
         if terminal_result.score > 0:
             add_scenario(
                 f"terminal_impulse_{direction.value}",
@@ -92,7 +117,7 @@ def generate_scenarios(
                 terminal_result.details,
             )
 
-        triangle_result = is_triangle(window, triangle_rules)
+        triangle_result = is_triangle(window, triangle_params)
         if triangle_result.score > 0:
             add_scenario(
                 f"triangle_{triangle_result.details.get('subtype')}_{direction.value}",
@@ -108,7 +133,7 @@ def generate_scenarios(
         window = swings[idx : idx + 3]
         direction = Direction.UP if window[0].direction == Direction.UP else Direction.DOWN
 
-        zigzag_result = is_zigzag(window, zigzag_rules)
+        zigzag_result = is_zigzag(window, zigzag_params)
         if zigzag_result.score > 0:
             add_scenario(
                 f"zigzag_{direction.value}",
@@ -119,7 +144,7 @@ def generate_scenarios(
                 zigzag_result.details,
             )
 
-        flat_result = is_flat(window, flat_rules)
+        flat_result = is_flat(window, flat_params)
         if flat_result.score > 0:
             add_scenario(
                 f"flat_{direction.value}",
@@ -159,5 +184,21 @@ def generate_scenarios(
                 triple_result.details,
             )
 
-    scenarios.sort(key=lambda item: item["score"], reverse=True)
-    return scenarios[:max_scenarios]
+    scenarios.sort(key=lambda item: item["weighted_score"], reverse=True)
+    pruned: list[dict[str, Any]] = []
+    for candidate in scenarios:
+        c_start, c_end = candidate["swing_indices"]
+        keep = True
+        for existing in pruned:
+            e_start, e_end = existing["swing_indices"]
+            overlap = max(0, min(c_end, e_end) - max(c_start, e_start) + 1)
+            min_len = min(c_end - c_start + 1, e_end - e_start + 1)
+            # If overlapping heavily, keep only the higher weighted score
+            if overlap >= max(2, min_len // 2):
+                keep = False
+                break
+        if keep:
+            pruned.append(candidate)
+        if len(pruned) >= max_scenarios:
+            break
+    return pruned

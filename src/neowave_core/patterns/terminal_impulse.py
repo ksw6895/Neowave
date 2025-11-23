@@ -11,6 +11,7 @@ from neowave_core.patterns.common_types import (
     swing_lengths,
     swing_durations,
 )
+from neowave_core.rules_loader import TerminalImpulseRuleSet, extract_terminal_impulse_rules
 from neowave_core.swings import Direction, Swing
 
 
@@ -20,13 +21,18 @@ def _has_overlap(trend: Direction, wave1: Swing, wave4: Swing) -> bool:
     return wave4.high >= wave1.low
 
 
-def is_terminal_impulse(swings: Sequence[Swing], rules: dict | None = None) -> PatternCheckResult:
+def is_terminal_impulse(swings: Sequence[Swing], rules: dict | TerminalImpulseRuleSet | None = None) -> PatternCheckResult:
     """Validate a 5-swing terminal/ending diagonal."""
     if len(swings) != 5:
         return PatternCheckResult("terminal_impulse", False, 0.0, ["Terminal impulse requires 5 swings"])
     if not is_alternating(swings):
         return PatternCheckResult("terminal_impulse", False, 0.0, ["Swings must alternate for a terminal impulse"])
 
+    params = (
+        rules
+        if isinstance(rules, TerminalImpulseRuleSet)
+        else extract_terminal_impulse_rules(rules if isinstance(rules, dict) else None)
+    )
     lengths = swing_lengths(swings)
     durations = swing_durations(swings)
     trend = pattern_direction(swings)
@@ -48,21 +54,21 @@ def is_terminal_impulse(swings: Sequence[Swing], rules: dict | None = None) -> P
     expanding = lengths[0] < lengths[2] < lengths[4]
     require(contracting or expanding, "Terminal impulse should contract or expand progressively", 0.25)
 
-    require(length_ratio(lengths[1], lengths[0]) >= 0.33, "Wave 2 should be a deep correction", 0.1)
-    require(length_ratio(lengths[3], lengths[2]) >= 0.33, "Wave 4 should be a deep correction", 0.1)
+    require(length_ratio(lengths[1], lengths[0]) >= params.correction_depth_min, "Wave 2 should be a deep correction", 0.1)
+    require(length_ratio(lengths[3], lengths[2]) >= params.correction_depth_min, "Wave 4 should be a deep correction", 0.1)
 
-    require(similarity_ratio(lengths[0], lengths[2]) >= 0.5, "Waves 1 and 3 out of proportion", 0.1)
-    require(similarity_ratio(lengths[2], lengths[4]) >= 0.5, "Waves 3 and 5 out of proportion", 0.1)
+    require(similarity_ratio(lengths[0], lengths[2]) >= params.proportion_similarity, "Waves 1 and 3 out of proportion", 0.1)
+    require(similarity_ratio(lengths[2], lengths[4]) >= params.proportion_similarity, "Waves 3 and 5 out of proportion", 0.1)
 
     if durations[0] > 0 and durations[1] > 0:
         require(
-            length_ratio(durations[1], durations[0]) >= 0.33,
+            length_ratio(durations[1], durations[0]) >= params.correction_depth_min,
             "Wave 2 duration too small relative to Wave 1",
             0.05,
         )
     if durations[2] > 0 and durations[3] > 0:
         require(
-            length_ratio(durations[3], durations[2]) >= 0.33,
+            length_ratio(durations[3], durations[2]) >= params.correction_depth_min,
             "Wave 4 duration too small relative to Wave 3",
             0.05,
         )

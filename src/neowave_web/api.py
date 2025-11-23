@@ -7,6 +7,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
 
 from neowave_core import AnalysisConfig, detect_swings, generate_scenarios, load_rules
 from neowave_core.data_loader import DataLoaderError, fetch_ohlcv
@@ -61,10 +62,11 @@ def create_app(
     data_provider: Callable[..., pd.DataFrame] | None = None,
 ) -> FastAPI:
     """Create a FastAPI application serving NEoWave data and scenarios."""
-    config = analysis_config or AnalysisConfig()
+    load_dotenv()
+    config = analysis_config or AnalysisConfig.from_env()
     provider = data_provider or _default_data_provider
 
-    app = FastAPI(title="NEoWave Web Service", version="0.2.0")
+    app = FastAPI(title="NEoWave Web Service", version="0.2.1")
     index_html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -82,7 +84,7 @@ def create_app(
 
     @app.get("/api/ohlcv", response_model=CandleResponse)
     def get_ohlcv(
-        limit: int = Query(config.lookback, ge=10, le=2000),
+        limit: int = Query(config.lookback, ge=1, le=2000),
         symbol: str = Query(config.symbol),
         interval: str = Query(config.interval),
     ) -> CandleResponse:
@@ -94,7 +96,7 @@ def create_app(
 
     @app.get("/api/swings", response_model=SwingsResponse)
     def get_swings(
-        limit: int = Query(config.lookback, ge=10, le=2000),
+        limit: int = Query(config.lookback, ge=1, le=2000),
         symbol: str = Query(config.symbol),
         interval: str = Query(config.interval),
         price_threshold: float = Query(config.price_threshold_pct, ge=0.001, le=0.2),
@@ -111,7 +113,7 @@ def create_app(
 
     @app.get("/api/scenarios", response_model=ScenariosResponse)
     def get_scenarios(
-        limit: int = Query(config.lookback, ge=10, le=2000),
+        limit: int = Query(config.lookback, ge=1, le=2000),
         symbol: str = Query(config.symbol),
         interval: str = Query(config.interval),
         max_scenarios: int = Query(8, ge=1, le=20),

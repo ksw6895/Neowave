@@ -3,14 +3,11 @@ from __future__ import annotations
 from typing import Sequence
 
 from neowave_core.patterns.common_types import PatternCheckResult, pattern_direction
+from neowave_core.rules_loader import FlatRuleSet, extract_flat_rules
 from neowave_core.swings import Swing
 
-B_MIN_RATIO = 0.618
-C_MIN_RATIO = 0.382
-C_FAILURE_RATIO = 1.38
 
-
-def is_flat(swings: Sequence[Swing], rules: dict | None = None) -> PatternCheckResult:
+def is_flat(swings: Sequence[Swing], rules: dict | FlatRuleSet | None = None) -> PatternCheckResult:
     """Check a 3-swing flat correction."""
     violations: list[str] = []
     if len(swings) != 3:
@@ -18,6 +15,7 @@ def is_flat(swings: Sequence[Swing], rules: dict | None = None) -> PatternCheckR
     if swings[0].direction == swings[1].direction or swings[0].direction != swings[2].direction:
         return PatternCheckResult("flat", False, 0.0, ["Flat must alternate directions (A vs B vs C)"])
 
+    params = rules if isinstance(rules, FlatRuleSet) else extract_flat_rules(rules if isinstance(rules, dict) else None)
     lengths = [s.length for s in swings]
     durations = [s.duration for s in swings]
     trend = pattern_direction(swings)
@@ -33,10 +31,15 @@ def is_flat(swings: Sequence[Swing], rules: dict | None = None) -> PatternCheckR
             penalty = max(penalty, 1.0)
 
     b_ratio = lengths[1] / lengths[0] if lengths[0] else 0.0
-    require(b_ratio >= B_MIN_RATIO, "Wave B too small for a flat (needs >= 0.618 of A)", 1.0, critical=True)
+    require(
+        b_ratio >= params.b_min,
+        f"Wave B too small for a flat (needs >= {params.b_min:.3f} of A)",
+        1.0,
+        critical=True,
+    )
 
     c_ratio_a = lengths[2] / lengths[0] if lengths[0] else 0.0
-    require(c_ratio_a >= C_MIN_RATIO, "Wave C too small relative to Wave A", 0.6, critical=True)
+    require(c_ratio_a >= params.c_min, "Wave C too small relative to Wave A", 0.6, critical=True)
 
     # Time proportionality.
     if durations[0] > 0:
@@ -45,19 +48,21 @@ def is_flat(swings: Sequence[Swing], rules: dict | None = None) -> PatternCheckR
         require(durations[2] >= durations[0], "Wave C time shorter than Wave A", 0.1)
 
     subtype = "normal"
-    if b_ratio <= 0.8:
+    if b_ratio <= params.weak_b_threshold:
         subtype = "weak_b"
-    elif b_ratio <= 1.0:
+    elif b_ratio <= params.expanded_b_threshold:
         subtype = "normal"
     else:
         subtype = "expanded"
+        if b_ratio > params.running_flat_b_threshold:
+            subtype = "running_flat"
 
     # Additional C vs B sizing for subtype clarity.
     c_ratio_b = lengths[2] / lengths[1] if lengths[1] else 0.0
     if subtype == "weak_b" and c_ratio_b < 1.0:
         violations.append("Weak-B flat with short C (double failure risk)")
         penalty += 0.1
-    if c_ratio_b > C_FAILURE_RATIO:
+    if c_ratio_b > params.c_elongated:
         violations.append("Wave C elongated relative to Wave B")
         penalty += 0.1
 

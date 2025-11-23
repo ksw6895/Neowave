@@ -50,6 +50,18 @@ def test_zigzag_pattern_valid():
     assert result.details["subtype"] in {"normal", "elongated", "truncated"}
 
 
+def test_zigzag_truncated_classification():
+    base = datetime(2024, 1, 2, 12, 0)
+    swings = [
+        make_swing(100, 90, base, 2),
+        make_swing(90, 95, base + timedelta(hours=2), 2),
+        make_swing(95, 90, base + timedelta(hours=4), 2),
+    ]
+    result = is_zigzag(swings, {})
+    assert result.is_valid
+    assert result.details["subtype"] == "truncated"
+
+
 def test_flat_pattern_valid():
     base = datetime(2024, 1, 3, 0, 0)
     swings = [

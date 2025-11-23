@@ -3,15 +3,11 @@ from __future__ import annotations
 from typing import Sequence
 
 from neowave_core.patterns.common_types import PatternCheckResult, pattern_direction
+from neowave_core.rules_loader import ZigzagRuleSet, extract_zigzag_rules
 from neowave_core.swings import Swing
 
-B_MAX_RETRACE = 0.618
-C_MIN_RATIO = 0.382
-C_TYPIICAL_RATIO = 0.618
-C_ELONGATED_RATIO = 1.618
 
-
-def is_zigzag(swings: Sequence[Swing], rules: dict | None = None) -> PatternCheckResult:
+def is_zigzag(swings: Sequence[Swing], rules: dict | ZigzagRuleSet | None = None) -> PatternCheckResult:
     """Check a 3-swing zigzag correction."""
     violations: list[str] = []
     if len(swings) != 3:
@@ -20,6 +16,7 @@ def is_zigzag(swings: Sequence[Swing], rules: dict | None = None) -> PatternChec
     if swings[0].direction == swings[1].direction or swings[0].direction != swings[2].direction:
         return PatternCheckResult("zigzag", False, 0.0, ["Zigzag must be a 5-3-5 alternating structure"])
 
+    params = rules if isinstance(rules, ZigzagRuleSet) else extract_zigzag_rules(rules if isinstance(rules, dict) else None)
     lengths = [s.length for s in swings]
     durations = [s.duration for s in swings]
     trend = pattern_direction(swings)
@@ -35,10 +32,10 @@ def is_zigzag(swings: Sequence[Swing], rules: dict | None = None) -> PatternChec
             penalty = max(penalty, 1.0)
 
     b_ratio = lengths[1] / lengths[0] if lengths[0] else 0.0
-    require(b_ratio <= B_MAX_RETRACE, "Wave B retraces too much for a zigzag", 1.0, critical=True)
+    require(b_ratio <= params.b_max, "Wave B retraces too much for a zigzag", 1.0, critical=True)
 
     c_ratio = lengths[2] / lengths[0] if lengths[0] else 0.0
-    require(c_ratio >= C_MIN_RATIO, "Wave C too small relative to Wave A", 0.5, critical=True)
+    require(c_ratio >= params.c_min_valid, "Wave C too small relative to Wave A", 0.5, critical=True)
 
     # Time rules: B should take at least as long as A; C at least as long as A.
     if durations[0] > 0:
@@ -47,10 +44,10 @@ def is_zigzag(swings: Sequence[Swing], rules: dict | None = None) -> PatternChec
         require(durations[2] >= durations[0], "Wave C time shorter than Wave A", 0.1)
 
     subtype = "normal"
-    if c_ratio < C_TYPIICAL_RATIO:
+    if c_ratio < params.c_typical:
         subtype = "truncated"
-        penalty += 0.1
-    elif c_ratio > C_ELONGATED_RATIO:
+        penalty += 0.15
+    elif c_ratio > params.c_elongated:
         subtype = "elongated"
         penalty += 0.1
 

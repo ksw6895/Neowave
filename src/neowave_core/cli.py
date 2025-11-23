@@ -5,7 +5,10 @@ import logging
 import sys
 from typing import Any
 
+from dotenv import load_dotenv
+
 from neowave_core.config import (
+    AnalysisConfig,
     DEFAULT_INTERVAL,
     DEFAULT_LOOKBACK,
     DEFAULT_PRICE_THRESHOLD_PCT,
@@ -21,20 +24,21 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    env_defaults = AnalysisConfig.from_env()
     parser = argparse.ArgumentParser(description="NEoWave Elliott Wave scenario engine (Phase 1)")
-    parser.add_argument("--symbol", default=DEFAULT_SYMBOL, help="Symbol to analyze (default: BTCUSD)")
-    parser.add_argument("--interval", default=DEFAULT_INTERVAL, help="Candle interval (default: 1hour)")
-    parser.add_argument("--lookback", type=int, default=DEFAULT_LOOKBACK, help="Number of candles to request")
+    parser.add_argument("--symbol", default=env_defaults.symbol or DEFAULT_SYMBOL, help="Symbol to analyze (default: BTCUSD)")
+    parser.add_argument("--interval", default=env_defaults.interval or DEFAULT_INTERVAL, help="Candle interval (default: 1hour)")
+    parser.add_argument("--lookback", type=int, default=env_defaults.lookback or DEFAULT_LOOKBACK, help="Number of candles to request")
     parser.add_argument(
         "--price-threshold",
         type=float,
-        default=DEFAULT_PRICE_THRESHOLD_PCT,
+        default=env_defaults.price_threshold_pct or DEFAULT_PRICE_THRESHOLD_PCT,
         help="Reversal threshold for swing detection (fractional, default 0.01 => 1%%)",
     )
     parser.add_argument(
         "--similarity-threshold",
         type=float,
-        default=DEFAULT_SIMILARITY_THRESHOLD,
+        default=env_defaults.similarity_threshold or DEFAULT_SIMILARITY_THRESHOLD,
         help="Similarity threshold for merging swings (default 0.33)",
     )
     parser.add_argument(
@@ -50,6 +54,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_dotenv()
     args = parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.INFO,
