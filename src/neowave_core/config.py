@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 DEFAULT_SYMBOL = "BTCUSD"
@@ -10,6 +10,11 @@ DEFAULT_LOOKBACK = 500
 DEFAULT_PRICE_THRESHOLD_PCT = 0.01  # 1% reversal threshold
 DEFAULT_SIMILARITY_THRESHOLD = 0.33  # Rule of Similarity baseline
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3/historical-chart"
+SWING_SCALES = [
+    {"id": "macro", "price_threshold_pct": 0.025, "similarity_threshold": 0.4},
+    {"id": "base", "price_threshold_pct": DEFAULT_PRICE_THRESHOLD_PCT, "similarity_threshold": DEFAULT_SIMILARITY_THRESHOLD},
+    {"id": "micro", "price_threshold_pct": 0.005, "similarity_threshold": 0.3},
+]
 
 
 def _env_float(name: str, default: float) -> float:
@@ -41,6 +46,7 @@ class AnalysisConfig:
     lookback: int = DEFAULT_LOOKBACK
     price_threshold_pct: float = DEFAULT_PRICE_THRESHOLD_PCT
     similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD
+    swing_scales: list[dict[str, float]] = field(default_factory=lambda: [dict(scale) for scale in SWING_SCALES])
 
     @classmethod
     def from_env(cls) -> "AnalysisConfig":
@@ -51,4 +57,13 @@ class AnalysisConfig:
             lookback=_env_int("LOOKBACK", DEFAULT_LOOKBACK),
             price_threshold_pct=_env_float("PRICE_THRESHOLD_PCT", DEFAULT_PRICE_THRESHOLD_PCT),
             similarity_threshold=_env_float("SIMILARITY_THRESHOLD", DEFAULT_SIMILARITY_THRESHOLD),
+            swing_scales=[dict(scale) for scale in SWING_SCALES],
         )
+
+    def find_scale(self, scale_id: str | None) -> dict[str, float] | None:
+        if not scale_id:
+            return None
+        for scale in self.swing_scales:
+            if scale.get("id") == scale_id:
+                return scale
+        return None

@@ -9,6 +9,8 @@ from typing import Iterable, List, Sequence
 import numpy as np
 import pandas as pd
 
+from neowave_core.config import DEFAULT_PRICE_THRESHOLD_PCT, DEFAULT_SIMILARITY_THRESHOLD, SWING_SCALES
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +42,12 @@ class Swing:
     @property
     def time_seconds(self) -> float:
         return self.duration
+
+
+@dataclass(slots=True)
+class SwingSet:
+    scale_id: str
+    swings: Sequence["Swing"]
 
 
 def _build_swing(df: pd.DataFrame, start_idx: int, end_idx: int, direction: Direction) -> Swing:
@@ -175,3 +183,23 @@ def detect_swings(
 def swings_to_array(swings: Iterable[Swing]) -> np.ndarray:
     """Convert swing lengths to an array for quick calculations."""
     return np.array([s.length for s in swings], dtype=float)
+
+
+def detect_swings_multi_scale(
+    df: pd.DataFrame,
+    scales: list[dict] | None = None,
+) -> list[SwingSet]:
+    """Run swing detection across multiple predefined scales (macro/base/micro)."""
+    config_scales = scales or SWING_SCALES
+    results: list[SwingSet] = []
+    for scale in config_scales:
+        scale_id = scale.get("id", "base")
+        price_threshold_pct = float(scale.get("price_threshold_pct", DEFAULT_PRICE_THRESHOLD_PCT))
+        similarity_threshold = float(scale.get("similarity_threshold", DEFAULT_SIMILARITY_THRESHOLD))
+        swings = detect_swings(
+            df,
+            price_threshold_pct=price_threshold_pct,
+            similarity_threshold=similarity_threshold,
+        )
+        results.append(SwingSet(scale_id=scale_id, swings=swings))
+    return results

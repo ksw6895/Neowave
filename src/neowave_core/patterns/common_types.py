@@ -13,6 +13,7 @@ class PatternCheckResult:
     score: float
     violations: list[str] = field(default_factory=list)
     details: dict[str, Any] | None = None
+    rule_checks: list[Any] = field(default_factory=list)
 
 
 def is_alternating(swings: Sequence[Swing]) -> bool:

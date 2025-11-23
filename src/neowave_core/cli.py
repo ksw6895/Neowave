@@ -16,6 +16,7 @@ from neowave_core.config import (
     DEFAULT_SYMBOL,
 )
 from neowave_core.data_loader import DataLoaderError, fetch_ohlcv
+from neowave_core.parser import ParseSettings
 from neowave_core.rules_loader import load_rules
 from neowave_core.scenarios import generate_scenarios
 from neowave_core.swings import detect_swings
@@ -86,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         rules,
         max_scenarios=args.max_scenarios,
         current_price=current_price,
+        settings=ParseSettings(similarity_threshold=args.similarity_threshold),
     )
     if not scenarios:
         print("No scenarios detected with current parameters.")

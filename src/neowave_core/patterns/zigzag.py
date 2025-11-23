@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Sequence
 
 from neowave_core.patterns.common_types import PatternCheckResult, pattern_direction
+from neowave_core.rule_checks import RuleCheck
 from neowave_core.rules_loader import ZigzagRuleSet, extract_zigzag_rules
 from neowave_core.swings import Swing
 
@@ -10,6 +11,7 @@ from neowave_core.swings import Swing
 def is_zigzag(swings: Sequence[Swing], rules: dict | ZigzagRuleSet | None = None) -> PatternCheckResult:
     """Check a 3-swing zigzag correction."""
     violations: list[str] = []
+    rule_checks: list[RuleCheck] = []
     if len(swings) != 3:
         return PatternCheckResult("zigzag", False, 0.0, ["Zigzag requires exactly 3 swings"])
 
@@ -22,26 +24,65 @@ def is_zigzag(swings: Sequence[Swing], rules: dict | ZigzagRuleSet | None = None
     trend = pattern_direction(swings)
     penalty = 0.0
 
-    def require(condition: bool, message: str, weight: float, critical: bool = False) -> None:
+    def record(
+        key: str,
+        description: str,
+        value: float | bool,
+        expected: str,
+        condition: bool,
+        weight: float,
+        critical: bool = False,
+    ) -> None:
         nonlocal penalty
+        rule_checks.append(RuleCheck(key=key, description=description, value=value, expected=expected, passed=condition, penalty=0.0 if condition else weight))
         if condition:
             return
-        violations.append(message)
+        violations.append(description)
         penalty += weight
         if critical:
             penalty = max(penalty, 1.0)
 
     b_ratio = lengths[1] / lengths[0] if lengths[0] else 0.0
-    require(b_ratio <= params.b_max, "Wave B retraces too much for a zigzag", 1.0, critical=True)
+    record(
+        "waveb_retrace",
+        "Wave B retraces too much for a zigzag",
+        b_ratio,
+        f"<= {params.b_max:.3f}",
+        b_ratio <= params.b_max,
+        1.0,
+        critical=True,
+    )
 
     c_ratio = lengths[2] / lengths[0] if lengths[0] else 0.0
-    require(c_ratio >= params.c_min_valid, "Wave C too small relative to Wave A", 0.5, critical=True)
+    record(
+        "wavec_vs_wavea",
+        "Wave C too small relative to Wave A",
+        c_ratio,
+        f">= {params.c_min_valid:.3f}",
+        c_ratio >= params.c_min_valid,
+        0.5,
+        critical=True,
+    )
 
     # Time rules: B should take at least as long as A; C at least as long as A.
     if durations[0] > 0:
-        require(durations[1] >= durations[0], "Wave B time shorter than Wave A", 0.1)
+        record(
+            "waveb_time",
+            "Wave B time shorter than Wave A",
+            durations[1] / durations[0] if durations[0] else 0.0,
+            ">= 1.0",
+            durations[1] >= durations[0],
+            0.1,
+        )
     if durations[0] > 0:
-        require(durations[2] >= durations[0], "Wave C time shorter than Wave A", 0.1)
+        record(
+            "wavec_time",
+            "Wave C time shorter than Wave A",
+            durations[2] / durations[0] if durations[0] else 0.0,
+            ">= 1.0",
+            durations[2] >= durations[0],
+            0.1,
+        )
 
     subtype = "normal"
     if c_ratio < params.c_typical:
@@ -58,5 +99,6 @@ def is_zigzag(swings: Sequence[Swing], rules: dict | ZigzagRuleSet | None = None
         "b_ratio": b_ratio,
         "c_ratio": c_ratio,
         "subtype": subtype,
+        "rule_checks": rule_checks,
     }
-    return PatternCheckResult("zigzag", is_valid, score, violations, details=details)
+    return PatternCheckResult("zigzag", is_valid, score, violations, details=details, rule_checks=rule_checks)

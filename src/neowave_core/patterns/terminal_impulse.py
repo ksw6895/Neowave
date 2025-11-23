@@ -11,6 +11,7 @@ from neowave_core.patterns.common_types import (
     swing_lengths,
     swing_durations,
 )
+from neowave_core.rule_checks import RuleCheck
 from neowave_core.rules_loader import TerminalImpulseRuleSet, extract_terminal_impulse_rules
 from neowave_core.swings import Direction, Swing
 
@@ -37,44 +38,110 @@ def is_terminal_impulse(swings: Sequence[Swing], rules: dict | TerminalImpulseRu
     durations = swing_durations(swings)
     trend = pattern_direction(swings)
     violations: list[str] = []
+    rule_checks: list[RuleCheck] = []
     penalty = 0.0
 
-    def require(condition: bool, message: str, weight: float, critical: bool = False) -> None:
+    def record(
+        key: str,
+        description: str,
+        value: float | bool,
+        expected: str,
+        condition: bool,
+        weight: float,
+        critical: bool = False,
+    ) -> None:
         nonlocal penalty
+        rule_checks.append(RuleCheck(key=key, description=description, value=value, expected=expected, passed=condition, penalty=0.0 if condition else weight))
         if condition:
             return
-        violations.append(message)
+        violations.append(description)
         penalty += weight
         if critical:
             penalty = max(penalty, 1.0)
 
-    require(lengths[2] >= min(lengths[0], lengths[4]), "Wave 3 cannot be the shortest motive wave", 0.5, critical=True)
+    record(
+        "wave3_not_shortest",
+        "Wave 3 cannot be the shortest motive wave",
+        lengths[2],
+        f">= min(w1,w5) ({min(lengths[0], lengths[4]):.2f})",
+        lengths[2] >= min(lengths[0], lengths[4]),
+        0.5,
+        critical=True,
+    )
 
     contracting = lengths[0] > lengths[2] > lengths[4]
     expanding = lengths[0] < lengths[2] < lengths[4]
-    require(contracting or expanding, "Terminal impulse should contract or expand progressively", 0.25)
+    record(
+        "progression",
+        "Terminal impulse should contract or expand progressively",
+        {"w1": lengths[0], "w3": lengths[2], "w5": lengths[4]},
+        "contracting or expanding",
+        contracting or expanding,
+        0.25,
+    )
 
-    require(length_ratio(lengths[1], lengths[0]) >= params.correction_depth_min, "Wave 2 should be a deep correction", 0.1)
-    require(length_ratio(lengths[3], lengths[2]) >= params.correction_depth_min, "Wave 4 should be a deep correction", 0.1)
+    record(
+        "wave2_depth",
+        "Wave 2 should be a deep correction",
+        length_ratio(lengths[1], lengths[0]),
+        f">= {params.correction_depth_min:.2f}",
+        length_ratio(lengths[1], lengths[0]) >= params.correction_depth_min,
+        0.1,
+    )
+    record(
+        "wave4_depth",
+        "Wave 4 should be a deep correction",
+        length_ratio(lengths[3], lengths[2]),
+        f">= {params.correction_depth_min:.2f}",
+        length_ratio(lengths[3], lengths[2]) >= params.correction_depth_min,
+        0.1,
+    )
 
-    require(similarity_ratio(lengths[0], lengths[2]) >= params.proportion_similarity, "Waves 1 and 3 out of proportion", 0.1)
-    require(similarity_ratio(lengths[2], lengths[4]) >= params.proportion_similarity, "Waves 3 and 5 out of proportion", 0.1)
+    record(
+        "w1_w3_similarity",
+        "Waves 1 and 3 out of proportion",
+        similarity_ratio(lengths[0], lengths[2]),
+        f">= {params.proportion_similarity:.2f}",
+        similarity_ratio(lengths[0], lengths[2]) >= params.proportion_similarity,
+        0.1,
+    )
+    record(
+        "w3_w5_similarity",
+        "Waves 3 and 5 out of proportion",
+        similarity_ratio(lengths[2], lengths[4]),
+        f">= {params.proportion_similarity:.2f}",
+        similarity_ratio(lengths[2], lengths[4]) >= params.proportion_similarity,
+        0.1,
+    )
 
     if durations[0] > 0 and durations[1] > 0:
-        require(
-            length_ratio(durations[1], durations[0]) >= params.correction_depth_min,
+        record(
+            "wave2_time_depth",
             "Wave 2 duration too small relative to Wave 1",
+            length_ratio(durations[1], durations[0]),
+            f">= {params.correction_depth_min:.2f}",
+            length_ratio(durations[1], durations[0]) >= params.correction_depth_min,
             0.05,
         )
     if durations[2] > 0 and durations[3] > 0:
-        require(
-            length_ratio(durations[3], durations[2]) >= params.correction_depth_min,
+        record(
+            "wave4_time_depth",
             "Wave 4 duration too small relative to Wave 3",
+            length_ratio(durations[3], durations[2]),
+            f">= {params.correction_depth_min:.2f}",
+            length_ratio(durations[3], durations[2]) >= params.correction_depth_min,
             0.05,
         )
 
     overlap = _has_overlap(trend, swings[0], swings[3])
-    require(overlap, "Terminal impulse expects wave 4 overlap with wave 1 territory", 0.2)
+    record(
+        "wave4_overlap",
+        "Terminal impulse expects wave 4 overlap with wave 1 territory",
+        overlap,
+        "True",
+        overlap,
+        0.2,
+    )
 
     score = max(0.0, 1.0 - penalty)
     is_valid = score >= 0.5
@@ -83,5 +150,6 @@ def is_terminal_impulse(swings: Sequence[Swing], rules: dict | TerminalImpulseRu
         "mode": "contracting" if contracting else "expanding",
         "wave_lengths": lengths,
         "overlap": overlap,
+        "rule_checks": rule_checks,
     }
-    return PatternCheckResult("terminal_impulse", is_valid, score, violations, details=details)
+    return PatternCheckResult("terminal_impulse", is_valid, score, violations, details=details, rule_checks=rule_checks)

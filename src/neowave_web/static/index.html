@@ -103,6 +103,28 @@
         margin-bottom: 10px;
         letter-spacing: 1px;
       }
+      .scale-selector {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .scale-pill {
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 700;
+        transition: all 0.2s ease;
+      }
+      .scale-pill.active,
+      .scale-pill:hover {
+        color: var(--accent-primary);
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 10px rgba(0, 242, 255, 0.2);
+      }
       .tf-selector {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -163,6 +185,27 @@
         font-size: 22px;
         font-weight: 700;
         color: rgba(255, 255, 255, 0.2);
+      }
+      .wave-overlay-layer {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .wave-box {
+        position: absolute;
+        border: 1px solid rgba(0, 242, 255, 0.5);
+        background: rgba(0, 242, 255, 0.08);
+        box-shadow: 0 0 12px rgba(0, 242, 255, 0.2);
+        border-radius: 8px;
+      }
+      .wave-box-label {
+        position: absolute;
+        top: 4px;
+        left: 6px;
+        font-size: 10px;
+        font-family: "JetBrains Mono", monospace;
+        color: #00f2ff;
+        letter-spacing: 0.5px;
       }
       .scenarios-panel {
         border-left: 1px solid rgba(255, 255, 255, 0.05);
@@ -253,6 +296,68 @@
         border-top: 1px solid rgba(255, 255, 255, 0.06);
         padding-top: 6px;
       }
+      .sc-evidence-toggle {
+        font-size: 11px;
+        color: var(--accent-primary);
+        cursor: pointer;
+        margin-top: 6px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .sc-evidence-toggle:hover {
+        text-decoration: underline;
+      }
+      .evidence-modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(4px);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 30;
+      }
+      .evidence-modal.open {
+        display: flex;
+      }
+      .evidence-panel {
+        background: rgba(10, 10, 15, 0.95);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 16px;
+        max-width: 520px;
+        width: 92%;
+        max-height: 80vh;
+        overflow: auto;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+      }
+      .evidence-panel h4 {
+        margin: 0 0 10px;
+        font-size: 14px;
+        letter-spacing: 0.4px;
+      }
+      .evidence-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      .evidence-table th,
+      .evidence-table td {
+        padding: 6px 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        text-align: left;
+      }
+      .evidence-table th {
+        color: var(--text-muted);
+        font-weight: 600;
+      }
+      .badge-pass {
+        color: #00e676;
+      }
+      .badge-fail {
+        color: var(--accent-secondary);
+      }
       ::-webkit-scrollbar {
         width: 6px;
       }
@@ -311,7 +416,12 @@
         </div>
         <div class="control-group">
           <h3>Settings</h3>
-          <div style="font-size: 11px; color: #666">Auto-scan active</div>
+          <div style="font-size: 11px; color: #666; margin-bottom:8px;">Auto-scan active</div>
+          <div class="scale-selector" id="scale-selector">
+            <div class="scale-pill active" data-scale="base">Base</div>
+            <div class="scale-pill" data-scale="macro">Macro</div>
+            <div class="scale-pill" data-scale="micro">Micro</div>
+          </div>
         </div>
         <button class="btn-primary" id="btn-refresh">Force Scan</button>
       </aside>
@@ -321,6 +431,7 @@
           <div class="chart-title" id="chart-symbol">BTC/USD</div>
         </div>
         <div id="tv-chart"></div>
+        <div id="wave-overlay-layer" class="wave-overlay-layer"></div>
       </main>
 
       <aside class="panel scenarios-panel">
@@ -330,6 +441,16 @@
         </div>
         <div id="scenario-list" class="scenario-list"></div>
       </aside>
+    </div>
+
+    <div id="evidence-modal" class="evidence-modal">
+      <div class="evidence-panel">
+        <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <h4 style="margin:0;">Rule X-Ray</h4>
+          <button id="evidence-close" style="background:none; border:1px solid rgba(255,255,255,0.2); color:#fff; padding:4px 8px; border-radius:6px; cursor:pointer;">Close</button>
+        </div>
+        <div id="evidence-body"></div>
+      </div>
     </div>
 
     <script src="/static/app.js"></script>

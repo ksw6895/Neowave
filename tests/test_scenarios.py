@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from neowave_core.patterns.impulse import is_impulse
 from neowave_core.rules_loader import load_rules
 from neowave_core.scenarios import generate_scenarios
 from neowave_core.swings import Direction, Swing
@@ -35,6 +34,13 @@ def test_generate_scenarios_returns_impulse():
     ]
 
     rules = load_rules("rules/neowave_rules.json")
-    scenarios = generate_scenarios(swings, rules, max_scenarios=3)
-    assert any(s["pattern_type"].startswith("impulse") for s in scenarios)
-    assert scenarios[0]["score"] <= 1.0
+    scenarios = generate_scenarios(swings, rules, max_scenarios=3, scale_id="base")
+    assert scenarios, "Expected at least one scenario"
+    primary = scenarios[0]
+    assert primary["pattern_type"].lower() in {"impulse", "monowave"}
+    assert primary["score"] <= 1.0
+    assert isinstance(primary["details"].get("wave_tree"), dict)
+    assert "active_path" in primary["details"]
+    assert primary.get("wave_box") is None or isinstance(primary.get("wave_box"), dict)
+    assert isinstance(primary.get("rule_evidence"), list)
+    assert isinstance(primary.get("wave_labels"), list)
