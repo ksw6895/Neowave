@@ -9,6 +9,7 @@ const timeframeButtons = document.querySelectorAll(".tf-btn");
 let chart;
 let candleSeries;
 let projectionSeries;
+let waveSeries;
 let activePriceLines = [];
 let activeScenarioId = null;
 
@@ -48,6 +49,62 @@ function parseSwings(swings) {
     end_ts: Math.floor(new Date(swing.end_time).getTime() / 1000),
     start_ts: Math.floor(new Date(swing.start_time).getTime() / 1000),
   }));
+}
+
+function toUnixSeconds(value) {
+  const ts = new Date(value).getTime();
+  if (!Number.isFinite(ts)) return null;
+  return Math.floor(ts / 1000);
+}
+
+function markerTimeFromNode(node) {
+  const parsed = toUnixSeconds(node.end_time);
+  if (Number.isFinite(parsed)) return parsed;
+  const idx = Number(node.end_idx);
+  if (Number.isInteger(idx) && state.candles[idx]) return state.candles[idx].time;
+  return null;
+}
+
+function flattenWaveMarkers(tree, depth = 0, markers = []) {
+  if (!tree) return markers;
+  const children = Array.isArray(tree.sub_waves) ? tree.sub_waves : [];
+  children.forEach((child) => {
+    const time = markerTimeFromNode(child);
+    if (time) {
+      const labelText = `${child.label} ${Number(child.end_price).toFixed(2)}`;
+      markers.push({
+        time,
+        position: child.end_price >= child.start_price ? "belowBar" : "aboveBar",
+        color: ["#00f2ff", "#9b59b6", "#f39c12", "#1abc9c"][depth % 4],
+        shape: "circle",
+        text: labelText,
+      });
+    }
+    flattenWaveMarkers(child, depth + 1, markers);
+  });
+  return markers;
+}
+
+function buildWavePath(tree) {
+  if (!tree) return [];
+  const points = [];
+  const pushPoint = (node) => {
+    const time = markerTimeFromNode(node);
+    const value = Number(node.end_price);
+    if (!time || !Number.isFinite(value)) return;
+    points.push({ time, value });
+  };
+  const walk = (node) => {
+    const children = Array.isArray(node.sub_waves) ? node.sub_waves : [];
+    if (!children.length) {
+      pushPoint(node);
+      return;
+    }
+    children.forEach((child) => walk(child));
+  };
+  walk(tree);
+  points.sort((a, b) => a.time - b.time);
+  return points;
 }
 
 function initChart() {
@@ -90,6 +147,13 @@ function initChart() {
     color: "rgba(0, 242, 255, 0.8)",
     lineWidth: 2,
     lineStyle: LightweightCharts.LineStyle.Dashed,
+  });
+  waveSeries = chart.addLineSeries({
+    color: "#00d1b2",
+    lineWidth: 2,
+    lineStyle: LightweightCharts.LineStyle.Solid,
+    priceLineVisible: false,
+    crossHairMarkerVisible: false,
   });
 }
 
@@ -153,35 +217,18 @@ function drawProjection(scenario) {
     projectionSeries.setData([]);
     return;
   }
-  const swings = state.swings;
-  if (!swings || !swings.length) {
+  const proj = scenario.details && scenario.details.projection;
+  const waveTree = scenario.details && scenario.details.wave_tree;
+  if (!proj || !waveTree) {
     projectionSeries.setData([]);
     return;
   }
-  const [startIdx, endIdx] = scenario.swing_indices || [0, -1];
-  const targetSwing = swings[endIdx] || swings[swings.length - 1];
-  if (!targetSwing) return;
-
-  const lastPrice = Number(targetSwing.end_price);
-  const lastTime = targetSwing.end_ts;
-  const direction =
-    (scenario.details && scenario.details.direction === "down") ||
-    scenario.pattern_type.includes("down")
-      ? -1
-      : 1;
-  const waveLengths = scenario.details && Array.isArray(scenario.details.wave_lengths) ? scenario.details.wave_lengths : [];
-  const avgSwing = waveLengths.length
-    ? waveLengths.reduce((sum, v) => sum + Math.abs(v || 0), 0) / waveLengths.length
-    : Math.abs(targetSwing.end_price - targetSwing.start_price);
-  const stepPrice = Math.max(avgSwing * 0.4, (Math.abs(lastPrice) || 1) * 0.002);
-
-  const candles = state.candles;
-  const stepTime =
-    candles.length >= 2 ? (candles[candles.length - 1].time - candles[candles.length - 2].time) : 3600;
-
+  const lastCandle = state.candles.length ? state.candles[state.candles.length - 1] : null;
+  const lastTime = toUnixSeconds(waveTree.end_time) || (lastCandle ? lastCandle.time : 0);
+  const targetTime = proj.target_time ? toUnixSeconds(proj.target_time) : lastTime + 7200;
   const projection = [
-    { time: lastTime, value: lastPrice },
-    { time: lastTime + stepTime * 2, value: lastPrice + direction * stepPrice },
+    { time: lastTime, value: Number(waveTree.end_price) },
+    { time: targetTime, value: Number(proj.target_price) },
   ];
   projectionSeries.setData(projection);
 }
@@ -191,25 +238,35 @@ function highlightScenario(scenario) {
   drawProjection(scenario);
 
   if (!scenario || !Array.isArray(state.swings)) {
+    if (waveSeries) waveSeries.setData([]);
     renderBaseSwingMarkers();
     return;
   }
 
-  const [startIdx, endIdx] = scenario.swing_indices || [0, -1];
-  const subset = state.swings.slice(startIdx, endIdx + 1);
-  if (!subset.length) {
-    renderBaseSwingMarkers();
-    return;
+  const waveTree = scenario.details && scenario.details.wave_tree;
+  if (waveTree) {
+    const path = buildWavePath(waveTree);
+    if (waveSeries) waveSeries.setData(path);
+    const markers = flattenWaveMarkers(waveTree);
+    candleSeries.setMarkers(markers);
+  } else {
+    const [startIdx, endIdx] = scenario.swing_indices || [0, -1];
+    const subset = state.swings.slice(startIdx, endIdx + 1);
+    const labels = scenarioWaveLabels(subset.length);
+    const markers = subset.map((swing, idx) => ({
+      time: swing.end_ts,
+      position: swing.direction === "up" ? "belowBar" : "aboveBar",
+      color: swing.direction === "up" ? "#00f2ff" : "#ff0055",
+      shape: swing.direction === "up" ? "arrowUp" : "arrowDown",
+      text: `${labels[idx] || "S"} ${Number(swing.end_price).toFixed(2)}`,
+    }));
+    candleSeries.setMarkers(markers);
+    const path = subset
+      .map((s) => ({ time: s.end_ts, value: Number(s.end_price) }))
+      .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value))
+      .sort((a, b) => a.time - b.time);
+    if (waveSeries) waveSeries.setData(path);
   }
-  const labels = scenarioWaveLabels(subset.length);
-  const markers = subset.map((swing, idx) => ({
-    time: swing.end_ts,
-    position: swing.direction === "up" ? "belowBar" : "aboveBar",
-    color: swing.direction === "up" ? "#00f2ff" : "#ff0055",
-    shape: swing.direction === "up" ? "arrowUp" : "arrowDown",
-    text: `${labels[idx] || "S"} ${Number(swing.end_price).toFixed(2)}`,
-  }));
-  candleSeries.setMarkers(markers);
   drawInvalidations(scenario.invalidation_levels);
 }
 
@@ -229,6 +286,7 @@ function renderScenariosList() {
     const ongoing = Boolean(sc.in_progress);
     card.className = `scenario-card${activeScenarioId === idx ? " active" : ""}${ongoing ? " ongoing" : ""}`;
     const scoreClass = sc.score > 0.8 ? "high" : "";
+    const activePath = Array.isArray(sc.details?.active_path) ? sc.details.active_path.join(" → ") : "";
     const invalidation = sc.invalidation_levels || {};
     const invText =
       Object.keys(invalidation).length === 0
@@ -243,7 +301,7 @@ function renderScenariosList() {
         <span class="sc-score ${scoreClass}">${(sc.score * 100).toFixed(0)}%</span>
       </div>
       <div class="sc-summary">${sc.textual_summary}</div>
-      <div class="sc-meta">Swings ${sc.swing_indices?.[0]} ~ ${sc.swing_indices?.[1]} | Inv: ${invText}</div>
+      <div class="sc-meta">Path: ${activePath || "n/a"} | Swings ${sc.swing_indices?.[0]} ~ ${sc.swing_indices?.[1]} | Inv: ${invText}</div>
     `;
     card.addEventListener("click", () => {
       activeScenarioId = idx;
@@ -276,6 +334,7 @@ async function loadData() {
     state.scenarios = scenariosResp.scenarios || [];
 
     renderCandles();
+    if (waveSeries) waveSeries.setData([]);
     renderBaseSwingMarkers();
     renderScenariosList();
 
