@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
+
+from neowave_core.parser import ParseSettings, parse_wave_tree
+from neowave_core.wave_tree import build_wave_tree_from_parsed, serialize_wave_tree
 
 import numpy as np
 
@@ -181,41 +184,103 @@ def _complexity_penalty(node: WaveNode) -> float:
     return 0.0
 
 
-def _micro_analysis(node: WaveNode, micro_swings: Sequence[Swing], similarity_threshold: float) -> dict[str, object] | None:
+def _micro_analysis(
+    node: WaveNode,
+    micro_swings: Sequence[Swing],
+    similarity_threshold: float,
+    rules: dict[str, Any] | None,
+) -> dict[str, object] | None:
     window = [sw for sw in micro_swings if node.start_time <= sw.start_time and sw.end_time <= node.end_time]
     if not window:
         return {"scale": "micro", "score": 0.0, "violations": ["No micro swings in node window"], "swing_count": 0}
-    alternating = all(window[i].direction != window[i - 1].direction for i in range(1, len(window)))
+
     swing_count = len(window)
+    alternating = all(window[i].direction != window[i - 1].direction for i in range(1, len(window)))
     score = 1.0
     violations: list[str] = []
-    if node.pattern_type.lower() in {"impulse", "terminalimpulse", "terminal_impulse"}:
+
+    micro_pattern: dict[str, Any] | None = None
+    if rules is not None and swing_count >= 3:
+        try:
+            micro_tree = parse_wave_tree(window, rules, settings=ParseSettings(similarity_threshold=similarity_threshold))
+            if micro_tree.roots:
+                micro_root = micro_tree.roots[0]
+                micro_ui_tree = build_wave_tree_from_parsed(micro_root)
+                micro_pattern = {
+                    "pattern_type": micro_root.pattern_type,
+                    "score": micro_root.score,
+                    "wave_count": len(micro_root.sub_waves),
+                    "swing_indices": (micro_root.start_idx, micro_root.end_idx),
+                    "wave_tree": serialize_wave_tree(micro_ui_tree),
+                }
+        except Exception:
+            micro_pattern = None
+
+    parent_type = node.pattern_type.lower()
+    if parent_type in {"impulse", "terminalimpulse", "terminal_impulse"}:
         if swing_count < 5:
             score -= 0.4
             violations.append("Micro structure lacks 5 legs for impulse")
         if not alternating:
             score -= 0.2
             violations.append("Micro swings do not alternate for impulse")
+        if micro_pattern and micro_pattern.get("pattern_type", "").lower() not in {"impulse", "terminalimpulse", "terminal_impulse"}:
+            score -= 0.25
+            violations.append("Micro pattern not motive while parent is impulse")
+        if micro_pattern and micro_pattern.get("wave_count", 0) < 5:
+            score -= 0.1
+            violations.append("Micro impulse subdivision incomplete")
+    elif parent_type == "triangle":
+        if swing_count < 5:
+            score -= 0.25
+            violations.append("Triangle leg lacks 5 micro swings")
+        if not alternating:
+            score -= 0.1
+            violations.append("Triangle micro swings not alternating")
+        if micro_pattern and micro_pattern.get("pattern_type", "").lower() != "triangle":
+            score -= 0.1
+            violations.append("Micro pattern not triangular")
     else:
         if swing_count < 3:
             score -= 0.2
             violations.append("Micro structure too small for correction")
         if not alternating:
             score -= 0.1
+            violations.append("Micro swings do not alternate for correction")
+
     similarity_penalty, _ = _adjacent_similarity([WaveNode.from_swing(idx, sw) for idx, sw in enumerate(window)], similarity_threshold)
-    score = max(0.0, score - similarity_penalty)
-    return {
+    score -= similarity_penalty
+
+    avg_len = float(np.mean([sw.length for sw in window])) if window else 0.0
+    avg_time = float(np.mean([sw.duration for sw in window])) if window else 0.0
+    ratios: dict[str, float] = {}
+    if avg_len > 0:
+        ratios["price_ratio"] = node.length / avg_len
+    if avg_time > 0:
+        ratios["time_ratio"] = node.duration / avg_time
+    if ratios and (ratios.get("price_ratio", 0.0) < 3.0 or ratios.get("time_ratio", 0.0) < 3.0):
+        score -= 0.05
+        violations.append("Macro/micro separation < 3x on price/time")
+
+    score = max(0.0, min(1.0, score))
+    result = {
         "scale": "micro",
         "score": round(score, 3),
         "violations": violations,
         "swing_count": swing_count,
+        "alternating": alternating,
     }
+    if micro_pattern:
+        result["pattern"] = micro_pattern
+    if ratios:
+        result["scale_ratio"] = ratios
+    return result
 
 
-def _attach_micro_to_tree(node: WaveNode, micro_swings: Sequence[Swing], similarity_threshold: float) -> None:
-    node.sub_scale_analysis = _micro_analysis(node, micro_swings, similarity_threshold)
+def _attach_micro_to_tree(node: WaveNode, micro_swings: Sequence[Swing], similarity_threshold: float, rules: dict[str, Any] | None) -> None:
+    node.sub_scale_analysis = _micro_analysis(node, micro_swings, similarity_threshold, rules) if micro_swings else None
     for child in node.sub_waves:
-        _attach_micro_to_tree(child, micro_swings, similarity_threshold)
+        _attach_micro_to_tree(child, micro_swings, similarity_threshold, rules)
 
 
 def _score_node(node: WaveNode, similarity_threshold: float) -> tuple[float, list[str], list[RuleCheck]]:
@@ -257,9 +322,21 @@ def _score_node(node: WaveNode, similarity_threshold: float) -> tuple[float, lis
 
     if node.sub_scale_analysis:
         micro_score = float(node.sub_scale_analysis.get("score", 1.0) or 0.0)
+        micro_violations = node.sub_scale_analysis.get("violations") or []
         evidence.append(_rule_check("micro_consistency", "Micro consistency with parent", micro_score, ">= 0.7", micro_score >= 0.7, 0.15))
+        if micro_violations:
+            evidence.append(
+                _rule_check(
+                    "micro_detail",
+                    "; ".join(micro_violations[:3]),
+                    len(micro_violations),
+                    "0",
+                    False,
+                    min(0.15, 0.03 * len(micro_violations)),
+                )
+            )
         if micro_score < 0.7:
-            penalty += 0.1
+            penalty += 0.1 + min(0.1, 0.02 * len(micro_violations))
 
     # Recurse into children to accumulate penalties (lighter weight).
     for child in node.sub_waves:
@@ -275,6 +352,7 @@ def _score_node(node: WaveNode, similarity_threshold: float) -> tuple[float, lis
 def score_scenario_with_neowave_rules(
     tree: WaveTree,
     swings: Sequence[Swing],
+    rules: dict[str, Any] | None = None,
     micro_swings: Sequence[Swing] | None = None,
     similarity_threshold: float = 0.33,
 ) -> ScenarioRuleScore:
@@ -294,7 +372,7 @@ def score_scenario_with_neowave_rules(
     for root in tree.roots:
         _annotate_tree(root, swing_list, typical_scale)
         if micro_list:
-            _attach_micro_to_tree(root, micro_list, similarity_threshold)
+            _attach_micro_to_tree(root, micro_list, similarity_threshold, rules)
         node_penalty, node_hard, node_evidence = _score_node(root, similarity_threshold)
         penalty += node_penalty
         hard.extend(node_hard)

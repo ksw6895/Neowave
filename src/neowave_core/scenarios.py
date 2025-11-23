@@ -135,6 +135,7 @@ def generate_scenarios(
         rule_score = score_scenario_with_neowave_rules(
             tree,
             swing_list,
+            rules=rules,
             micro_swings=micro_swings,
             similarity_threshold=parse_settings.similarity_threshold,
         )

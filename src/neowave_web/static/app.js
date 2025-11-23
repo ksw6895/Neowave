@@ -19,6 +19,7 @@ let chart;
 let candleSeries;
 let projectionSeries;
 let waveSeries;
+let microWaveSeries;
 let activePriceLines = [];
 let activeWaveBoxes = [];
 let activeScenarioId = null;
@@ -310,6 +311,13 @@ function initChart() {
     priceLineVisible: false,
     crossHairMarkerVisible: false,
   });
+  microWaveSeries = chart.addLineSeries({
+    color: "rgba(255, 165, 0, 0.75)",
+    lineWidth: 2,
+    lineStyle: LightweightCharts.LineStyle.Solid,
+    priceLineVisible: false,
+    crossHairMarkerVisible: false,
+  });
 }
 
 function setStatus(text) {
@@ -417,6 +425,11 @@ function clearWaveBoxes() {
   if (!waveOverlayEl) return;
   waveOverlayEl.innerHTML = "";
   activeWaveBoxes = [];
+}
+
+function clearMicroOverlay() {
+  if (!microWaveSeries) return;
+  microWaveSeries.setData([]);
 }
 
 function drawWaveBoxForScenario(scenario) {
@@ -569,10 +582,12 @@ function drawProjection(scenario) {
 function highlightScenario(scenario) {
   clearPriceLines();
   clearWaveBoxes();
+  clearMicroOverlay();
   drawProjection(scenario);
 
   if (!scenario || !Array.isArray(state.swings)) {
     if (waveSeries) waveSeries.setData([]);
+    clearMicroOverlay();
     renderBaseSwingMarkers();
     return;
   }
@@ -582,6 +597,15 @@ function highlightScenario(scenario) {
   const waveTree = scenario.details && scenario.details.wave_tree;
   const hasWavePrice = waveTree && waveTree.end_price != null && waveTree.end_time;
   if (waveTree && hasWavePrice) {
+    const microTree = waveTree.sub_scale_analysis && waveTree.sub_scale_analysis.pattern && waveTree.sub_scale_analysis.pattern.wave_tree;
+    if (microWaveSeries) {
+      if (microTree) {
+        const microPath = buildPathFromWaveTree(microTree);
+        microWaveSeries.setData(microPath);
+      } else {
+        microWaveSeries.setData([]);
+      }
+    }
     const directChildren = Array.isArray(waveTree.sub_waves) ? waveTree.sub_waves : Array.isArray(waveTree.children) ? waveTree.children : [];
     let markers = buildMarkersFromNodes(directChildren);
     if (!markers.length) {
@@ -608,6 +632,7 @@ function highlightScenario(scenario) {
     candleSeries.setMarkers(markers);
     const path = buildPathFromSwings(subset, labelsFromScenario);
     if (waveSeries) waveSeries.setData(path);
+    clearMicroOverlay();
   }
   drawInvalidations(scenario.invalidation_levels);
 }
@@ -640,6 +665,10 @@ function renderScenariosList() {
     const violationText =
       Array.isArray(sc.violations) && sc.violations.length ? sc.violations.slice(0, 2).join(" · ") : "None";
     const hasEvidence = Array.isArray(sc.rule_evidence) && sc.rule_evidence.length > 0;
+    const microAnalysis = sc.wave_tree && sc.wave_tree.sub_scale_analysis;
+    const microScoreText = microAnalysis && typeof microAnalysis.score === "number" ? `${Math.round(microAnalysis.score * 100)}%` : "n/a";
+    const microViolationCount = Array.isArray(microAnalysis?.violations) ? microAnalysis.violations.length : 0;
+    const microText = `Micro ${microScoreText}${microViolationCount ? ` (${microViolationCount}v)` : ""}`;
     card.innerHTML = `
       <div class="sc-header">
         <span class="sc-type">${sc.pattern_type.replace(/_/g, " ").toUpperCase()}</span>
@@ -648,7 +677,7 @@ function renderScenariosList() {
       </div>
       <div class="sc-summary">${sc.textual_summary}</div>
       <div class="sc-meta">Path: ${activePath || "n/a"} | Swings ${sc.swing_indices?.[0]} ~ ${sc.swing_indices?.[1]} | Inv: ${invText}</div>
-      <div class="sc-meta">Scale: ${sc.scale_id || state.scaleId} | ${anchorText} | Violations: ${violationText}</div>
+      <div class="sc-meta">Scale: ${sc.scale_id || state.scaleId} | ${anchorText} | ${microText} | Violations: ${violationText}</div>
       <div class="sc-meta">Wave Box: ${sc.wave_box ? "yes" : "no"} | Score W: ${(sc.weighted_score ?? sc.score).toFixed(2)}</div>
       ${hasEvidence ? `<div class="sc-evidence-toggle" data-idx="${idx}">Rule X-Ray ▶</div>` : ""}
     `;
@@ -706,6 +735,7 @@ async function analyzeCustomRange(startTs, endTs) {
     renderCandles();
     if (waveSeries) waveSeries.setData([]);
     if (projectionSeries) projectionSeries.setData([]);
+    clearMicroOverlay();
     clearWaveBoxes();
     renderBaseSwingMarkers();
     renderScenariosList();
@@ -740,6 +770,7 @@ async function loadData() {
     renderCandles();
     if (waveSeries) waveSeries.setData([]);
     if (projectionSeries) projectionSeries.setData([]);
+    clearMicroOverlay();
     clearWaveBoxes();
     renderBaseSwingMarkers();
     renderScenariosList();
