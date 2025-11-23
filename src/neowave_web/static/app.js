@@ -321,11 +321,19 @@ function drawProjection(scenario) {
     return;
   }
   const lastCandle = state.candles.length ? state.candles[state.candles.length - 1] : null;
-  const lastTime = toUnixSeconds(waveTree.end_time) || (lastCandle ? lastCandle.time : 0);
-  const targetTime = proj.target_time ? toUnixSeconds(proj.target_time) : lastTime + 7200;
+  const lastTimeRaw = toUnixSeconds(waveTree.end_time);
+  const lastTime = Number.isFinite(lastTimeRaw) ? lastTimeRaw : lastCandle ? lastCandle.time : null;
+  const targetTimeRaw = proj.target_time ? toUnixSeconds(proj.target_time) : null;
+  const targetTime = Number.isFinite(targetTimeRaw) ? targetTimeRaw : Number.isFinite(lastTime) ? lastTime + 7200 : null;
+  const startValue = Number(waveTree.end_price);
+  const targetValue = Number(proj.target_price);
+  if (!Number.isFinite(lastTime) || !Number.isFinite(targetTime) || !Number.isFinite(startValue) || !Number.isFinite(targetValue)) {
+    projectionSeries.setData([]);
+    return;
+  }
   const projection = [
-    { time: lastTime, value: Number(waveTree.end_price) },
-    { time: targetTime, value: Number(proj.target_price) },
+    { time: lastTime, value: startValue },
+    { time: targetTime, value: targetValue },
   ];
   projectionSeries.setData(projection);
 }
