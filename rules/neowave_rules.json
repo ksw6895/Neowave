@@ -1,0 +1,312 @@
+{
+  "Impulse": {
+    "TrendingImpulse": {
+      "price_rules": [
+        "wave2_ratio = wave2_length/wave1_length; wave2_ratio >= 0.236 && wave2_ratio < 1.0",
+        "wave3_length > wave2_length && wave3_length >= wave1_length",
+        "wave3_not_shortest = (wave3_length >= wave1_length) && (wave3_length >= wave5_length)",
+        "extension_present = max(wave1_length, wave3_length, wave5_length) >= 1.618 * second_max(w1,w3,w5)",
+        "if (!extension_present) then allow special_case if wave3_longest && wave3_length >= wave1_length && wave5_length < wave3_length && wave3_length < 1.618*wave1_length",
+        "if (!extension_present) then allow special_case if wave1_longest && wave1_length < 1.618*wave3_length && wave3_end <= wave1_end + 0.618*wave1_length",
+        "wave5_length >= 0.382 * wave4_length",
+        "no_overlap = (wave4_low > wave1_high) for bullish impulse (or wave4_high < wave1_low for bearish)",
+        "2-4_line_slope_negative = wave3_price does not break line(wave2_end, wave4_end)"
+      ],
+      "time_rules": [
+        "wave2_time >= 0.33 * wave1_time (heuristic minimum)",
+        "wave4_time >= 0.33 * wave3_time (heuristic)",
+        "postImpulse_break: (time_to_break_2-4_line <= wave5_time)",
+        "alternation_time: (wave2_time >> wave4_time) or (wave2_time << wave4_time) (one correction much longer, the other shorter, as long as one is at least ~2x the other)",
+        "rule_of_similarity: For any adjacent waves, min(time_i, time_j)/max(time_i, time_j) >= 0.33 or min(price_i, price_j)/max(price_i, price_j) >= 0.33"
+      ],
+      "volume_rules": [
+        "volume_wave3 > volume_wave1 (usually)",
+        "volume_wave3 >= volume_wave5 (wave5 divergence expected)",
+        "if terminal_diagonal: volume_each_wave decreasing",
+        "if strong_extension_wave3: volume_wave3 is highest of pattern"
+      ],
+      "invalidation": [
+        "wave2_ratio >= 1.0 (wave2 retraced 100% or more) => invalid_impulse",
+        "wave3_shortest = (wave3_length < wave1_length) && (wave3_length < wave5_length) => invalid_impulse",
+        "no_extension && no_exception => invalid_impulse (pattern is corrective)",
+        "wave4_overlap_ok = false (if overlap and waves not all zigzags) => invalid as trending impulse, consider diagonal",
+        "postImpulse_break_failed (2-4 line not broken in <= wave5_time) => impulse likely incomplete or miscount"
+      ]
+    },
+    "TerminalImpulse": {
+      "price_rules": [
+        "overlap_ok = true (wave4 may overlap wave1 zone)",
+        "waves1_3_5_internal = 'zigzag_or_combo' (each motive wave often a zigzag)",
+        "wave3_not_shortest (still applies)",
+        "extension_present or all three waves ~equal length (diagonals often have no huge extension, but one wave can still be a bit longer)",
+        "wave1 > wave3 > wave5 in length for contracting diagonal; or wave1 < wave3 < wave5 for expanding diagonal"
+      ],
+      "time_rules": [
+        "often longer overall duration than normal impulse",
+        "wave2_time and wave4_time often relatively large (deep corrections)",
+        "postImpulse_break rule may not apply if it's ending diagonal (because pattern itself ends trend)"
+      ],
+      "volume_rules": [
+        "volume generally decreasing each wave",
+        "often lowest volume on wave5 (significant drop-off, signaling termination)"
+      ],
+      "invalidation": [
+        "if any motive sub-wave (1,3,5) is clearly a 5-wave impulse (not zigzag) -> diagonal interpretation questionable (maybe normal impulse)",
+        "if wave3_shortest or other impulse base rules fail -> invalid even as diagonal",
+        "if diagonal does not converge/diverge properly (e.g., wave5 too long in contracting) -> invalid count"
+      ]
+    }
+  },
+  "Corrections": {
+    "Zigzag": {
+      "price_rules": [
+        "waveA_internal = '5-wave impulse or leading diagonal'",
+        "waveB_ratio = waveB_length/waveA_length; waveB_ratio <= 0.618",
+        "waveC_internal = '5-wave impulse or ending diagonal'",
+        "waveC_length >= 0.618 * waveA_length",
+        "if waveC_length < 0.618*waveA_length then pattern = 'truncated zigzag'",
+        "if waveC_length > 1.618*waveA_length then pattern = 'elongated zigzag'"
+      ],
+      "time_rules": [
+        "waveB_time >= waveA_time (waveB not shorter than A):contentReference[oaicite:340]{index=340}",
+        "if waveA_time ~ waveB_time then waveC_time ~ waveA_time + waveB_time:contentReference[oaicite:341]{index=341}",
+        "if waveB_time >> waveA_time then waveC_time ~ (waveA_time + waveB_time)/2:contentReference[oaicite:342]{index=342}",
+        "waveC_time >= waveA_time (waveC typically longest or equal in time in zigzag)",
+        "total_correction_time often short relative to impulse (zigzags are sharp), but use >= 0.25*prior_impulse_time as guideline"
+      ],
+      "volume_rules": [
+        "volume_peak often at waveA or waveC",
+        "waveB volume usually lighter than waveA",
+        "truncated zigzag: waveC volume very low (weak push)",
+        "elongated zigzag: waveC volume high (capitulation)"
+      ],
+      "invalidation": [
+        "waveB_ratio > 0.618 => not a zigzag (likely flat):contentReference[oaicite:343]{index=343}",
+        "waveA or waveC not 5-wave structures => invalid zigzag labeling",
+        "if truncated (C short) and next rally fails to retrace >= 0.81 of zigzag => original zigzag count invalid:contentReference[oaicite:344]{index=344}",
+        "if elongated (C long) and next move fails to retrace > 0.618 of waveC quickly => re-check (maybe impulse):contentReference[oaicite:345]{index=345}"
+      ]
+    },
+    "Flat": {
+      "price_rules": [
+        "waveA_internal = '3-wave (zigzag or complex)',
+        "waveB_ratio = waveB_length/waveA_length; waveB_ratio >= 0.618",
+        "waveC_internal = '5-wave impulse/diag'",
+        "waveC_length >= 0.382 * waveA_length",
+        "Flat_type = case:",
+        "  waveB_ratio <= 0.8 -> 'weak B flat'",
+        "  0.81 <= waveB_ratio <= 1.0 -> 'normal flat'",
+        "  waveB_ratio > 1.0 -> 'expanded(flat)'",
+        "if expanded:",
+        "  if waveB_ratio <= 1.236: expect waveC > waveB_start (Irregular Flat):contentReference[oaicite:346]{index=346}",
+        "  if waveB_ratio > 1.236: expect waveC <= waveA_start (Running Flat likely):contentReference[oaicite:347]{index=347}",
+        "flat_subtype_output accordingly (c_failure, etc based on C vs B and C vs A)",
+        "if normal/weak B:",
+        "  waveC vs waveB:",
+        "    if waveC_length < waveB_length -> 'C-failure' (if B normal) or 'double failure' (if B weak):contentReference[oaicite:348]{index=348}:contentReference[oaicite:349]{index=349}",
+        "    if waveC_length ~1.0-1.38 * waveB_length -> 'regular flat' (normal B) or 'B-failure flat' (weak B, since B didn't reach A):contentReference[oaicite:350]{index=350}:contentReference[oaicite:351]{index=351}",
+        "    if waveC_length > 1.38 * waveB_length -> 'elongated flat'",
+        "waveC_end relative to waveA_start:",
+        "  if waveC_end < waveA_start -> running flat (requires waveB > 1.0*A to occur)",
+        "  if waveC_end ~ waveA_start -> regular/weak flat scenario",
+        "  if waveC_end >> waveA_start -> elongated (beyond typical flat range)"
+      ],
+      "time_rules": [
+        "waveB_time >= waveA_time (B never faster than A in flats):contentReference[oaicite:352]{index=352}",
+        "often waveB is longer in time than A; waveC often similar or longer than A",
+        "if waveA_time ~ waveB_time then waveC_time ~ waveA+waveB:contentReference[oaicite:353]{index=353}",
+        "if waveB_time >> waveA_time then waveC_time ~ (A+B)/2:contentReference[oaicite:354]{index=354} (though less common scenario since B usually >= A time)",
+        "total_flat_time usually > zigzag time (flats more sideways), maybe 0.5-1.5x prior impulse time"
+      ],
+      "volume_rules": [
+        "waveB can have anomalously high volume (especially expanded B on news) or very low (low conviction); it's variable.",
+        "waveC volume generally lower than waveA volume (except perhaps initial moments of C).",
+        "Overall volume often sideways or declining through A->C, with possible spike at B turning point.",
+        "Running flat: often low volume on waveC (trend resumes without enthusiasm)."
+      ],
+      "invalidation": [
+        "waveB_ratio < 0.618 => not a flat:contentReference[oaicite:355]{index=355} (likely zigzag)",
+        "waveC_length < 0.382*waveA_length => flat not valid (C too small):contentReference[oaicite:356]{index=356}",
+        "if identified running flat (B>>A, C fails new extreme) but market does not promptly continue trend after waveC, then interpretation likely invalid (running flat should lead to quick trend resumption).",
+        "if pattern appears too clean (A and C equal, B exactly 100%) and channels perfectly, expect an X-wave -> do not finalize flat as complete:contentReference[oaicite:357]{index=357}"
+      ]
+    },
+    "Triangle": {
+      "Contracting": {
+        "price_rules": [
+          "waveA_length = max leg; waveC_length ~ 0.618 * waveA_length:contentReference[oaicite:358]{index=358}",
+          "waveE_length >= 0.382 * waveC_length && waveE_length <= 0.99 * waveC_length:contentReference[oaicite:359]{index=359}",
+          "waveA_high/low and waveC_high/low define converging trendlines with waveB and waveD.",
+          "Each wave B, C, D, E should be smaller than the previous same-direction wave: |B| < |A|, |C| < |A|, |D| < |C|, |E| < |C|.",
+          "Violent wave: waveA is sharpest (often biggest single-bar moves in waveA)."
+        ],
+        "time_rules": [
+          "No strict time ratios given, but often waveA and B durations are comparable, same for C and D, with E maybe quick.",
+          "If B_time ~ A_time, then C_time ~ A_time + B_time (common triangle time rule):contentReference[oaicite:360]{index=360}",
+          "If B_time >> A_time, then C_time ~ (A_time + B_time)/2:contentReference[oaicite:361]{index=361}",
+          "B_time can be less than A_time only if B_price < A_price (reverse alt scenario):contentReference[oaicite:362]{index=362}",
+          "Expect overall triangle duration >> any one wave duration (triangles are prolonged consolidations)."
+        ],
+        "volume_rules": [
+          "Volume should diminish each wave: Vol(A) > Vol(C) > Vol(E) (approx trend down):contentReference[oaicite:363]{index=363}",
+          "Often significant volume on initial break (wave A), then progressively lower.",
+          "Reverse alternation case (small B): volume might spike on waveC then drop on D/E"
+        ],
+        "invalidation": [
+          "if waveC_length >= waveA_length => not contracting:contentReference[oaicite:364]{index=364}",
+          "if waveE_length > waveC_length (or waveE extends beyond C's price range) => not contracting triangle:contentReference[oaicite:365]{index=365}",
+          "if waveB_length < 0.382*waveA_length AND waveD_length is not > waveC_length (reverse alt expected but not seen) => triangle classification issue",
+          "if triangle trendlines do not converge (lines parallel or diverging with no alt explanation) => not a contracting triangle (maybe neutral or another pattern).",
+          "if any wave fails to be 3-wave internally (e.g. a 5-wave in A-E) => invalid triangle count."
+        ]
+      },
+      "Expanding": {
+        "price_rules": [
+          "waveA_length = smallest; waveC_length >= 1.01 * waveA_length:contentReference[oaicite:366]{index=366} (typically 1.1-1.618x)",
+          "waveE_length >= 1.01 * waveC_length:contentReference[oaicite:367]{index=367} (often up to 1.618x C, can blow-off to ~2.618x):contentReference[oaicite:368]{index=368}",
+          "Waves increase: |B| > |A|, |C| > |A|, |D| > |B|, |E| > |C|.",
+          "Trendlines diverge: connect A-C and B-D, moving apart.",
+          "Possibility of extreme E: allow waveE_length <= 2.618*max(A,C) in exceptional blow-off."
+        ],
+        "time_rules": [
+          "Often triangle expands with increasing duration too, but not strictly required.",
+          "If B_time ~ A_time then C_time ~ A+B (C usually larger though):contentReference[oaicite:369]{index=369}",
+          "If B_time >> A_time then C_time ~ (A+B)/2:contentReference[oaicite:370]{index=370} (less relevant if B already huge).",
+          "Time might increase each wave or stay similar; pattern can accelerate on E."
+        ],
+        "volume_rules": [
+          "Volume may increase as swings get larger, but often market participation is uncertain - can spike on E (blow-off top volume).",
+          "No strict requirement to decline volume (unlike contracting). But typically, not steady rising either (vol might be erratic)."
+        ],
+        "invalidation": [
+          "if waveC_length <= waveA_length (C not beyond A) => not expanding:contentReference[oaicite:371]{index=371}",
+          "if waveE_length <= waveC_length => pattern failed to expand on E (likely not an expanding triangle):contentReference[oaicite:372]{index=372}",
+          "if waveE goes far beyond expected (>> 2.618 of C/A) => likely a different structure (maybe an impulse wave instead of just E).",
+          "if trendlines do not clearly diverge (become parallel or converging) => not expanding (maybe neutral if near-parallel)."
+        ]
+      },
+      "Neutral": {
+        "price_rules": [
+          "waveC_length = largest wave:contentReference[oaicite:373]{index=373}",
+          "waveA_length >= 0.382*waveC_length and ~0.618-0.72*waveC_length:contentReference[oaicite:374]{index=374}",
+          "waveE_length >= 0.382*waveC_length and ~0.618-0.72*waveC_length (A and E ~equal):contentReference[oaicite:375]{index=375}",
+          "waveB_length < waveA_length, waveD_length < waveC_length typically (B,D smaller waves but not tiny).",
+          "Trendlines nearly parallel (A-C vs B-D slope difference small)."
+        ],
+        "time_rules": [
+          "Wave durations mostly similar (no dramatic contraction or expansion).",
+          "If A_time ~ B_time then C_time ~ A+B (like other triangles):contentReference[oaicite:376]{index=376}",
+          "If B_time << A_time (allowed if B smaller price) then C_time perhaps half-sum (with reverse alt effect making lines tilt):contentReference[oaicite:377]{index=377}",
+          "Overall pattern time moderately large (like contracting triangle scale)."
+        ],
+        "volume_rules": [
+          "Volume fairly even or gradually declining overall.",
+          "No big spike since no strong breakout until end; volume lowest usually towards end of E."
+        ],
+        "invalidation": [
+          "if waveC is not longest (e.g., waveA or E comparable or larger) => not neutral:contentReference[oaicite:378]{index=378}",
+          "if waveA and waveE are not similar in size (disparity > ~15-20%) => pattern likely not neutral (maybe contracting or expanding).",
+          "if trendlines slope significantly (converge or diverge a lot) => not neutral, misclassified.",
+          "if internal waves have issues (e.g., waveB or D too large relative to neighbors breaking similarity) => re-check type (maybe reverse alt case or different triangle type)."
+        ]
+      }
+    },
+    "Combination": {
+      "DoubleThree": {
+        "price_rules": [
+          "Identify W and Y patterns:",
+          "  pattern_W_valid = true (W can be Zigzag, Flat, or Triangle)",
+          "  pattern_Y_valid = true (Y is Zigzag, Flat, Triangle)",
+          "X_wave_internal = 'zigzag or flat' typically, smaller magnitude",
+          "X_retrace_W = X_length / W_length <= 0.618 (X usually shallow connector):contentReference[oaicite:379]{index=379}",
+          "Total net correction more sideways/lengthy than either W or Y alone",
+          "Ensure overall structure: W + X + Y forms continuous correction (Y should end beyond W's end in net direction)."
+        ],
+        "time_rules": [
+          "Time(W) and Time(Y) can differ, but overall Time(total) = Time(W)+Time(X)+Time(Y), typically >> Time(W) alone.",
+          "X_time < (Time(W) or Time(Y)) (connectors are shorter usually).",
+          "No strict ratio, but X often quick relative to major segments; Y can take time similar to W or more."
+        ],
+        "volume_rules": [
+          "Often volume low during X (a pause), higher during W and Y swings.",
+          "No unique volume signature except perhaps distinct phases: volume picks up in W and Y, lulls in X."
+        ],
+        "invalidation": [
+          "if cannot segregate two distinct corrective phases => not a valid double three.",
+          "if pattern W or Y fails its own identification rules => combination invalid.",
+          "if X-wave is too large (e.g., retraces > 80% of W or lasts as long as W) => likely miscount (X misidentified or W+Y are actually one).",
+          "If total segments > 3 (beyond W,X,Y) and needs extra => it's not just a double (maybe triple)."
+        ]
+      },
+      "TripleThree": {
+        "price_rules": [
+          "pattern_W, pattern_Y, pattern_Z all valid corrections.",
+          "X1 and X2 are connectors, each shallow relative to preceding segment (<= 0.5-0.618 retracements ideally).",
+          "Overall correction moves price sideways or to target with three distinct legs separated by two smaller pivots."
+        ],
+        "time_rules": [
+          "Even longer total duration (Time_total = sum of 3 patterns + 2 X waves).",
+          "X waves typically short in time relative to main patterns.",
+          "Usually spans a significant time proportion of prior trend (often longest correction of cycle)."
+        ],
+        "volume_rules": [
+          "Prolonged low volatility periods interspersed with a few spikes on key turns (especially if one part is a triangle, volume really dries up in it).",
+          "No unified volume trend; likely overall declining or flat volume until final leg nearing completion."
+        ],
+        "invalidation": [
+          "if need more than 2 X waves => invalid (can't have quadruple combo):contentReference[oaicite:380]{index=380}",
+          "if any of W,Y,Z invalid on its own => triple three invalid.",
+          "Triple-three is complex: if pattern could be interpreted as diametric or symmetrical (7 or 9 waves with uniformity) rather than 3 distinct patterns, the triple-three count might be wrong."
+        ]
+      }
+    },
+    "Advanced": {
+      "Diametric": {
+        "price_rules": [
+          "7 waves labeled A-G forming a symmetric pattern.",
+          "First half (A-B-C-D) shows bias (expanding or contracting) which reverses in second half (D-E-F-G).",
+          "Wave D often a 'middle' that is not extreme in price, E often echoes A in price on opposite side.",
+          "Waves tend to be moderate in price variance: no one wave hugely outscales others (expansion/contraction is gradual and subtle)."
+        ],
+        "time_rules": [
+          "All 7 waves have comparable durations (most within ~10-25% of each other):contentReference[oaicite:381]{index=381}.",
+          "One or two waves may be slightly longer or shorter, but not by multiples.",
+          "Pattern tends to have a steady rhythm, unlike combinations which might have long and short pieces."
+        ],
+        "volume_rules": [
+          "Volume often steady or declining slightly; pattern doesn't have big volume swings (market in balance).",
+          "Possibly a slight volume pickup around wave D (middle) and drop toward G."
+        ],
+        "invalidation": [
+          "if wave_count != 7 (strictly) => not diametric.",
+          "if wave_time variance is large (e.g., one wave double another's time) => not diametric:contentReference[oaicite:382]{index=382}.",
+          "if shape does not exhibit reversal of expansion at midpoint => may not be diametric.",
+          "if appears as two combined patterns with an X (check for a small connector internally) => then it's not single diametric, likely combo -> invalid diametric count."
+        ]
+      },
+      "Symmetrical": {
+        "price_rules": [
+          "9 waves A-I roughly equal in price amplitude (differences 0-10%):contentReference[oaicite:383]{index=383}.",
+          "No strong net trend; price oscillates around a level.",
+          "Any two same-direction waves differ by at most a few percent.",
+          "Often final consolidation before big move (market in equilibrium)."
+        ],
+        "time_rules": [
+          "9 waves with nearly equal durations (within ~10%):contentReference[oaicite:384]{index=384}.",
+          "All waves consume similar bar counts/time.",
+          "Two waves might be slightly off, but pattern as a whole shows uniform timing."
+        ],
+        "volume_rules": [
+          "Volume minimal and steady; participants indecisive.",
+          "Often one of lowest volatility & volume patterns (market 'sleeping')."
+        ],
+        "invalidation": [
+          "if wave_count != 9 => not symmetrical.",
+          "if any wave significantly longer/shorter or larger/smaller than rest (>10% dev.) => pattern not true symmetrical:contentReference[oaicite:385]{index=385}.",
+          "if one can identify internal sub-patterns (like looks like a double/triple three instead) => then treat as combo, not symmetrical.",
+          "Symmetrical is last resort identification (if rules for other patterns fail but 9 equal waves seen)."
+        ]
+      }
+    }
+  }
+}
