@@ -48,12 +48,16 @@ function renderChart(candles, swings) {
   }
 
   const size = chartEl.getBoundingClientRect();
-  let width = Math.max(320, Math.floor(size.width || 800));
-  let height = Math.max(320, Math.floor(size.height || 520));
+  const width = Math.max(320, Math.floor(size.width || 800));
+  const height = Math.max(320, Math.floor(size.height || 520));
   chartEl.style.minHeight = `${height}px`;
   chartEl.style.width = "100%";
+
+  // Initialize chart and candlestick series (simplified, no fallbacks).
   if (!chart) {
-    const chartApi = LightweightCharts.createChart(chartEl, {
+    chart = LightweightCharts.createChart(chartEl, {
+      width,
+      height,
       layout: {
         background: { color: "transparent" },
         textColor: "#c6d2ee",
@@ -66,12 +70,6 @@ function renderChart(candles, swings) {
       rightPriceScale: { borderColor: "rgba(255,255,255,0.08)" },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
-    if (!chartApi || typeof chartApi.addCandlestickSeries !== "function") {
-      if (hintEl) hintEl.textContent = "Chart API unavailable.";
-      return;
-    }
-    chart = chartApi;
-    chart.applyOptions({ width, height });
     candleSeries = chart.addCandlestickSeries({
       upColor: "#20e3b2",
       downColor: "#ff6b6b",
@@ -82,41 +80,15 @@ function renderChart(candles, swings) {
     });
   }
   if (!candleSeries) {
-    candleSeries = typeof chart.addCandlestickSeries === "function" ? chart.addCandlestickSeries() : null;
+    candleSeries = chart.addCandlestickSeries();
   }
-  if (!candleSeries) {
-    if (hintEl) hintEl.textContent = "Failed to init candlestick series.";
-    return;
-  }
-
-  const data = candles.map((c) => ({
-    time: Math.floor(new Date(c.timestamp).getTime() / 1000),
-    open: Number(c.open),
-    high: Number(c.high),
-    low: Number(c.low),
-    close: Number(c.close),
-  }));
-  if (typeof candleSeries.setData === "function") {
-    candleSeries.setData(normalizedCandles);
-    if (chart && typeof chart.timeScale === "function") {
-      chart.timeScale().fitContent();
-    }
-    // Ensure chart has a non-zero size (some layouts render with 0 width initially).
-    const newSize = chartEl.getBoundingClientRect();
-    const nextWidth = Math.max(320, Math.floor(newSize.width));
-    const nextHeight = Math.max(260, Math.floor(newSize.height));
-    if (nextWidth && nextHeight && chart && typeof chart.resize === "function") {
-      chart.resize(nextWidth, nextHeight);
-    }
-    console.debug("Set chart data", normalizedCandles.length, {
-      first: normalizedCandles[0],
-      last: normalizedCandles[normalizedCandles.length - 1],
-      size: { width: nextWidth, height: nextHeight },
-    });
-  } else {
+  if (!candleSeries || typeof candleSeries.setData !== "function") {
     if (hintEl) hintEl.textContent = "Chart series not ready.";
     return;
   }
+
+  candleSeries.setData(normalizedCandles);
+  chart.timeScale().fitContent();
 
   const markers =
     Array.isArray(swings) && swings.length > 0
