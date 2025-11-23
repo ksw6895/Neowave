@@ -80,14 +80,18 @@ function flattenWaveMarkers(tree, depth = 0, markers = []) {
     const priceValue = Number(child.end_price ?? child.start_price ?? child.price_high ?? child.price_low);
     if (time) {
       const labelText = `${child.label} ${Number.isFinite(priceValue) ? priceValue.toFixed(2) : ""}`;
-      const upMove = Number(child.end_price ?? child.start_price ?? 0) >= Number(child.start_price ?? child.end_price ?? 0);
-      markers.push({
-        time,
-        position: upMove ? "belowBar" : "aboveBar",
-        color: ["#00f2ff", "#9b59b6", "#f39c12", "#1abc9c"][depth % 4],
-        shape: "circle",
-        text: labelText,
-      });
+      const endVal = Number(child.end_price ?? child.start_price ?? 0);
+      const startVal = Number(child.start_price ?? child.end_price ?? 0);
+      if (Number.isFinite(priceValue) && Number.isFinite(endVal) && Number.isFinite(startVal)) {
+        const upMove = endVal >= startVal;
+        markers.push({
+          time,
+          position: upMove ? "belowBar" : "aboveBar",
+          color: ["#00f2ff", "#9b59b6", "#f39c12", "#1abc9c"][depth % 4],
+          shape: "circle",
+          text: labelText,
+        });
+      }
     }
     flattenWaveMarkers(child, depth + 1, markers);
   });
@@ -202,7 +206,8 @@ function drawWaveBoxForScenario(scenario) {
   if (!chart || !waveOverlayEl || !scenario?.wave_box) return;
   const box = scenario.wave_box;
   const timeScale = chart.timeScale();
-  const priceScale = candleSeries ? candleSeries.priceScale() : chart.priceScale("right");
+  const priceScale = candleSeries && typeof candleSeries.priceScale === "function" ? candleSeries.priceScale() : chart.priceScale("right");
+  if (!priceScale || typeof priceScale.priceToCoordinate !== "function") return;
 
   const t1 = Math.floor(new Date(box.time_start).getTime() / 1000);
   const t2 = Math.floor(new Date(box.time_end).getTime() / 1000);
@@ -309,8 +314,8 @@ function drawProjection(scenario) {
     return;
   }
   const proj = scenario.details && scenario.details.projection;
-  const waveTree = (scenario.details && scenario.details.wave_tree) || scenario.wave_tree;
-  if (!proj || !waveTree) {
+  const waveTree = scenario.details && scenario.details.wave_tree;
+  if (!proj || !waveTree || waveTree.end_price == null) {
     projectionSeries.setData([]);
     return;
   }
