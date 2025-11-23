@@ -59,6 +59,9 @@ class WaveNodeOut(BaseModel):
     end_price: float | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
+    box_ratio: float | None = None
+    energy_metric: float | None = None
+    sub_scale_analysis: dict[str, Any] | None = None
     children: list["WaveNodeOut"] = Field(default_factory=list)
 
 
@@ -80,9 +83,11 @@ class ScenarioOut(BaseModel):
     swing_indices: tuple[int, int]
     textual_summary: str
     invalidation_levels: dict[str, float] | None = None
+    violations: list[str] | None = None
     details: dict[str, Any] | None = None
     in_progress: bool | None = None
     scale_id: str | None = None
+    anchor_idx: int | None = None
     wave_box: WaveBoxOut | None = None
     wave_labels: list[str] | None = None
     wave_tree: WaveNodeOut | None = None
@@ -92,6 +97,29 @@ class ScenarioOut(BaseModel):
 class ScenariosResponse(BaseModel):
     scenarios: list[ScenarioOut]
     count: int
+
+
+class AnchorCandidate(BaseModel):
+    idx: int
+    start_time: datetime
+    start_price: float
+
+
+class CustomRangeRequest(BaseModel):
+    symbol: str
+    interval: str
+    start_ts: int
+    end_ts: int
+    max_pivots: int | None = 5
+    max_scenarios: int | None = 3
+
+
+class CustomRangeResponse(BaseModel):
+    scenarios: list[ScenarioOut]
+    count: int
+    anchor_candidates: list[AnchorCandidate] | None = None
+    candles: list[Candle] | None = None
+    swings: list[SwingOut] | None = None
 
 
 WaveNodeOut.model_rebuild()

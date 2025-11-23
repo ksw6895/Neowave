@@ -33,26 +33,29 @@ uvicorn neowave_web.api:app --reload --port 8000
 ```
 - 기본 페이지: http://localhost:8000
 - 제공 엔드포인트
-  - `GET /api/ohlcv?symbol=BTCUSD&interval=1hour&limit=500`
-  - `GET /api/swings?scale_id=base|macro|micro&price_threshold=<opt>&similarity_threshold=<opt>`
-  - `GET /api/scenarios?scale_id=...&max_scenarios=8&price_threshold=<opt>&similarity_threshold=<opt>`
+- `GET /api/ohlcv?symbol=BTCUSD&interval=1hour&limit=500`
+- `GET /api/swings?scale_id=base|macro|micro&price_threshold=<opt>&similarity_threshold=<opt>`
+- `GET /api/scenarios?scale_id=...&max_scenarios=8&price_threshold=<opt>&similarity_threshold=<opt>`
+- `POST /api/analyze/custom-range` : `symbol`, `interval`, `start_ts`, `end_ts`로 임의 구간 분석 (multi-anchor + NEoWave 스코어)
 - Scenario 응답 주요 필드: `wave_box`, `wave_tree`, `wave_labels`, `rule_evidence`, `scale_id`, `invalidation_levels`, `details.active_path`, `details.scale_context`.
 
 ### CLI로 시나리오 출력
 ```bash
 python -m neowave_core.cli --symbol BTCUSD --interval 1hour --lookback 500
 ```
-주요 옵션: `--price-threshold`, `--similarity-threshold`, `--max-scenarios`, `--rules-path`, `--api-key`.
+주요 옵션: `--price-threshold`, `--similarity-threshold`, `--min-price-retrace-ratio`, `--min-time-ratio`, `--max-pivots`, `--max-scenarios`, `--rules-path`, `--api-key`.
 
 ## UI 사용법 요약
 - Timeframe 버튼: 차트 캔들 주기 변경.
 - Scale (Base/Macro/Micro): 스윙 감지 스케일 변경.
+- 영역 분석 토글: 차트를 드래그해 커스텀 구간을 지정하고 `/api/analyze/custom-range` 결과를 카드/차트에 반영. Anchor 후보는 별도 마커(별표)로 표기.
 - 카드 클릭: 해당 시나리오 Wave Box, 라벨, invalidation 표시.
 - Rule X-Ray ▶: 규칙별 값/기대치/패널티/통과 여부 모달.
 
 ## 환경 변수 (선택)
 - `SYMBOL`, `INTERVAL`, `LOOKBACK` : 기본 심볼/주기/캔들 수.
 - `PRICE_THRESHOLD_PCT`, `SIMILARITY_THRESHOLD`: 기본 스윙 감지 파라미터.
+- `MIN_PRICE_RETRACE_RATIO`, `MIN_TIME_RATIO`: NEoWave식 스윙 확정 임계값(가격/시간 1/3 룰).
 - `FMP_API_KEY`: 실데이터 조회용 FMP 키.
 
 ## 테스트

@@ -44,3 +44,5 @@ def test_generate_scenarios_returns_impulse():
     assert primary.get("wave_box") is None or isinstance(primary.get("wave_box"), dict)
     assert isinstance(primary.get("rule_evidence"), list)
     assert isinstance(primary.get("wave_labels"), list)
+    assert "anchor_idx" in primary
+    assert isinstance(primary.get("violations"), list)

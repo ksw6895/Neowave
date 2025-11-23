@@ -23,6 +23,9 @@ class WaveNode:
     end_time: Any | None = None
     high: float | None = None
     low: float | None = None
+    box_ratio: float | None = None
+    energy_metric: float | None = None
+    sub_scale_analysis: dict[str, Any] | None = None
     children: list["WaveNode"] = field(default_factory=list)
 
 
@@ -68,6 +71,9 @@ def _convert_node(node: ParsedWaveNode | None) -> WaveNode | None:
         end_time=node.end_time,
         high=node.high,
         low=node.low,
+        box_ratio=node.box_ratio,
+        energy_metric=node.energy_metric,
+        sub_scale_analysis=node.sub_scale_analysis,
         children=children,
     )
 

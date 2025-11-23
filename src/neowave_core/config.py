@@ -9,11 +9,32 @@ DEFAULT_INTERVAL = "1hour"
 DEFAULT_LOOKBACK = 500
 DEFAULT_PRICE_THRESHOLD_PCT = 0.01  # 1% reversal threshold
 DEFAULT_SIMILARITY_THRESHOLD = 0.33  # Rule of Similarity baseline
+DEFAULT_MIN_PRICE_RETRACE_RATIO = 0.23  # NEoWave monowave retrace (price)
+DEFAULT_MIN_TIME_RATIO = 0.33  # NEoWave monowave retrace (time)
+DEFAULT_SWING_COUNT_RANGE = (15, 80)  # target count window for automatic tuning
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3/historical-chart"
 SWING_SCALES = [
-    {"id": "macro", "price_threshold_pct": 0.025, "similarity_threshold": 0.4},
-    {"id": "base", "price_threshold_pct": DEFAULT_PRICE_THRESHOLD_PCT, "similarity_threshold": DEFAULT_SIMILARITY_THRESHOLD},
-    {"id": "micro", "price_threshold_pct": 0.005, "similarity_threshold": 0.3},
+    {
+        "id": "macro",
+        "price_threshold_pct": 0.025,
+        "similarity_threshold": 0.4,
+        "min_price_retrace_ratio": DEFAULT_MIN_PRICE_RETRACE_RATIO,
+        "min_time_ratio": DEFAULT_MIN_TIME_RATIO,
+    },
+    {
+        "id": "base",
+        "price_threshold_pct": DEFAULT_PRICE_THRESHOLD_PCT,
+        "similarity_threshold": DEFAULT_SIMILARITY_THRESHOLD,
+        "min_price_retrace_ratio": DEFAULT_MIN_PRICE_RETRACE_RATIO,
+        "min_time_ratio": DEFAULT_MIN_TIME_RATIO,
+    },
+    {
+        "id": "micro",
+        "price_threshold_pct": 0.005,
+        "similarity_threshold": 0.3,
+        "min_price_retrace_ratio": DEFAULT_MIN_PRICE_RETRACE_RATIO,
+        "min_time_ratio": DEFAULT_MIN_TIME_RATIO,
+    },
 ]
 
 
@@ -46,6 +67,9 @@ class AnalysisConfig:
     lookback: int = DEFAULT_LOOKBACK
     price_threshold_pct: float = DEFAULT_PRICE_THRESHOLD_PCT
     similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD
+    min_price_retrace_ratio: float = DEFAULT_MIN_PRICE_RETRACE_RATIO
+    min_time_ratio: float = DEFAULT_MIN_TIME_RATIO
+    swing_count_range: tuple[int, int] = DEFAULT_SWING_COUNT_RANGE
     swing_scales: list[dict[str, float]] = field(default_factory=lambda: [dict(scale) for scale in SWING_SCALES])
 
     @classmethod
@@ -57,6 +81,8 @@ class AnalysisConfig:
             lookback=_env_int("LOOKBACK", DEFAULT_LOOKBACK),
             price_threshold_pct=_env_float("PRICE_THRESHOLD_PCT", DEFAULT_PRICE_THRESHOLD_PCT),
             similarity_threshold=_env_float("SIMILARITY_THRESHOLD", DEFAULT_SIMILARITY_THRESHOLD),
+            min_price_retrace_ratio=_env_float("MIN_PRICE_RETRACE_RATIO", DEFAULT_MIN_PRICE_RETRACE_RATIO),
+            min_time_ratio=_env_float("MIN_TIME_RATIO", DEFAULT_MIN_TIME_RATIO),
             swing_scales=[dict(scale) for scale in SWING_SCALES],
         )
 

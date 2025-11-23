@@ -7,6 +7,10 @@ const confluenceBadgeEl = document.getElementById("confluence-badge");
 const timeframeButtons = document.querySelectorAll(".tf-btn");
 const scaleButtons = document.querySelectorAll(".scale-pill");
 const waveOverlayEl = document.getElementById("wave-overlay-layer");
+const rangeToggleBtn = document.getElementById("btn-range-toggle");
+const rangeResetBtn = document.getElementById("btn-range-reset");
+const rangeSelectionEl = document.getElementById("range-selection");
+const rangeHintEl = document.getElementById("range-hint");
 const evidenceModal = document.getElementById("evidence-modal");
 const evidenceBody = document.getElementById("evidence-body");
 const evidenceCloseBtn = document.getElementById("evidence-close");
@@ -26,6 +30,16 @@ const state = {
   candles: [],
   swings: [],
   scenarios: [],
+  rangeMode: false,
+  selectedRange: null, // {startTs, endTs}
+  rangeAnchors: [],
+  isCustomRange: false,
+};
+
+const rangeDrag = {
+  active: false,
+  startX: null,
+  endX: null,
 };
 
 const fmtKSTime = (value) => new Date(value).toLocaleString();
@@ -58,10 +72,29 @@ function parseSwings(swings) {
   }));
 }
 
+function parseAnchors(anchors) {
+  return (anchors || []).map((anchor) => ({
+    ...anchor,
+    ts: toUnixSeconds(anchor.start_time),
+  }));
+}
+
 function toUnixSeconds(value) {
   const ts = new Date(value).getTime();
   if (!Number.isFinite(ts)) return null;
   return Math.floor(ts / 1000);
+}
+
+function chartTimeToTs(raw) {
+  if (raw == null) return null;
+  if (typeof raw === "number") return Math.floor(raw);
+  if (typeof raw === "object" && "year" in raw && "month" in raw && "day" in raw) {
+    const { year, month, day } = raw;
+    const ts = new Date(Date.UTC(year, month - 1, day)).getTime();
+    return Number.isFinite(ts) ? Math.floor(ts / 1000) : null;
+  }
+  const ts = new Date(raw).getTime();
+  return Number.isFinite(ts) ? Math.floor(ts / 1000) : null;
 }
 
 function markerTimeFromNode(node) {
@@ -127,6 +160,32 @@ function buildPathFromWaveTree(tree) {
   return Array.from(dedup.entries())
     .map(([time, value]) => ({ time, value }))
     .sort((a, b) => a.time - b.time);
+}
+
+function clearRangeOverlay() {
+  if (!rangeSelectionEl) return;
+  rangeSelectionEl.style.display = "none";
+  rangeSelectionEl.style.width = "0px";
+  rangeSelectionEl.style.left = "0px";
+}
+
+function renderSelectedRange() {
+  if (!rangeSelectionEl || !chart || !state.selectedRange) {
+    clearRangeOverlay();
+    return;
+  }
+  const timeScale = chart.timeScale();
+  const startCoord = timeScale.timeToCoordinate(state.selectedRange.startTs);
+  const endCoord = timeScale.timeToCoordinate(state.selectedRange.endTs);
+  if (startCoord == null || endCoord == null) {
+    clearRangeOverlay();
+    return;
+  }
+  const left = Math.min(startCoord, endCoord);
+  const width = Math.abs(endCoord - startCoord);
+  rangeSelectionEl.style.display = "block";
+  rangeSelectionEl.style.left = `${left}px`;
+  rangeSelectionEl.style.width = `${width}px`;
 }
 
 function buildPathFromSwings(swings, labels) {
@@ -257,10 +316,73 @@ function setStatus(text) {
   if (lastUpdatedEl) lastUpdatedEl.textContent = text;
 }
 
+function setRangeMode(active) {
+  state.rangeMode = active;
+  if (rangeToggleBtn) rangeToggleBtn.classList.toggle("active", active);
+  if (rangeHintEl) rangeHintEl.textContent = active ? "차트 드래그로 분석 범위 지정" : "드래그로 구간 지정";
+  if (!active) {
+    rangeDrag.active = false;
+    clearRangeOverlay();
+  }
+}
+
+function resetCustomRange() {
+  state.isCustomRange = false;
+  state.selectedRange = null;
+  state.rangeAnchors = [];
+  clearRangeOverlay();
+}
+
+function drawRangeDragOverlay() {
+  if (!rangeSelectionEl || !chart || !rangeDrag.active) return;
+  const left = Math.min(rangeDrag.startX, rangeDrag.endX);
+  const width = Math.abs(rangeDrag.endX - rangeDrag.startX);
+  rangeSelectionEl.style.display = "block";
+  rangeSelectionEl.style.left = `${left}px`;
+  rangeSelectionEl.style.width = `${width}px`;
+}
+
+function finalizeRangeSelection() {
+  if (!chart) return;
+  const timeScale = chart.timeScale();
+  const startTime = chartTimeToTs(timeScale.coordinateToTime(rangeDrag.startX));
+  const endTime = chartTimeToTs(timeScale.coordinateToTime(rangeDrag.endX));
+  rangeDrag.active = false;
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || startTime === endTime) {
+    clearRangeOverlay();
+    return;
+  }
+  const startTs = Math.min(startTime, endTime);
+  const endTs = Math.max(startTime, endTime);
+  state.selectedRange = { startTs, endTs };
+  renderSelectedRange();
+  analyzeCustomRange(startTs, endTs);
+}
+
+function handleRangeMouseDown(event) {
+  if (!state.rangeMode || !chart) return;
+  rangeDrag.active = true;
+  rangeDrag.startX = event.offsetX;
+  rangeDrag.endX = event.offsetX;
+  drawRangeDragOverlay();
+}
+
+function handleRangeMouseMove(event) {
+  if (!rangeDrag.active) return;
+  rangeDrag.endX = event.offsetX;
+  drawRangeDragOverlay();
+}
+
+function handleRangeMouseUp() {
+  if (!rangeDrag.active) return;
+  finalizeRangeSelection();
+}
+
 function renderCandles() {
   if (!candleSeries) return;
   candleSeries.setData(state.candles);
   chart.timeScale().fitContent();
+  renderSelectedRange();
 }
 
 function renderBaseSwingMarkers() {
@@ -276,7 +398,19 @@ function renderBaseSwingMarkers() {
     shape: swing.direction === "up" ? "arrowUp" : "arrowDown",
     text: `S${idx + 1}`,
   }));
-  candleSeries.setMarkers(markers);
+  const anchorMarkers = (state.rangeAnchors || [])
+    .map((anchor) => {
+      if (!anchor || anchor.ts == null || anchor.start_price == null) return null;
+      return {
+        time: anchor.ts,
+        position: "aboveBar",
+        color: "#f1c40f",
+        shape: "star",
+        text: `A${anchor.idx}`,
+      };
+    })
+    .filter(Boolean);
+  candleSeries.setMarkers([...markers, ...anchorMarkers]);
 }
 
 function clearWaveBoxes() {
@@ -502,6 +636,9 @@ function renderScenariosList() {
         : Object.entries(invalidation)
             .map(([k, v]) => `${k}: ${Number(v).toFixed(2)}`)
             .join(" · ");
+    const anchorText = sc.anchor_idx != null ? `Anchor #${sc.anchor_idx}` : "Anchor auto";
+    const violationText =
+      Array.isArray(sc.violations) && sc.violations.length ? sc.violations.slice(0, 2).join(" · ") : "None";
     const hasEvidence = Array.isArray(sc.rule_evidence) && sc.rule_evidence.length > 0;
     card.innerHTML = `
       <div class="sc-header">
@@ -511,7 +648,8 @@ function renderScenariosList() {
       </div>
       <div class="sc-summary">${sc.textual_summary}</div>
       <div class="sc-meta">Path: ${activePath || "n/a"} | Swings ${sc.swing_indices?.[0]} ~ ${sc.swing_indices?.[1]} | Inv: ${invText}</div>
-      <div class="sc-meta">Scale: ${sc.scale_id || state.scaleId} | Wave Box: ${sc.wave_box ? "yes" : "no"}</div>
+      <div class="sc-meta">Scale: ${sc.scale_id || state.scaleId} | ${anchorText} | Violations: ${violationText}</div>
+      <div class="sc-meta">Wave Box: ${sc.wave_box ? "yes" : "no"} | Score W: ${(sc.weighted_score ?? sc.score).toFixed(2)}</div>
       ${hasEvidence ? `<div class="sc-evidence-toggle" data-idx="${idx}">Rule X-Ray ▶</div>` : ""}
     `;
     card.addEventListener("click", () => {
@@ -538,7 +676,54 @@ async function fetchJson(url) {
   return res.json();
 }
 
+async function analyzeCustomRange(startTs, endTs) {
+  setStatus("Custom range 분석 중...");
+  try {
+    const payload = {
+      symbol: state.symbol,
+      interval: state.interval,
+      start_ts: startTs,
+      end_ts: endTs,
+      max_pivots: 5,
+      max_scenarios: 5,
+    };
+    const res = await fetch("/api/analyze/custom-range", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(detail || "Request failed");
+    }
+    const data = await res.json();
+    state.candles = parseCandles(data.candles || []);
+    state.swings = parseSwings(data.swings || []);
+    state.scenarios = data.scenarios || [];
+    state.rangeAnchors = parseAnchors(data.anchor_candidates || []);
+    state.isCustomRange = true;
+    activeScenarioId = null;
+    renderCandles();
+    if (waveSeries) waveSeries.setData([]);
+    if (projectionSeries) projectionSeries.setData([]);
+    clearWaveBoxes();
+    renderBaseSwingMarkers();
+    renderScenariosList();
+    renderSelectedRange();
+    const candleCount = state.candles.length;
+    const rangeText = `${fmtKSTime(startTs * 1000)} ~ ${fmtKSTime(endTs * 1000)}`;
+    setStatus(`Custom range: ${rangeText} · ${candleCount} candles · ${state.swings.length} swings`);
+  } catch (err) {
+    console.error(err);
+    setStatus(`Custom 분석 실패: ${err.message}`);
+    state.selectedRange = null;
+    state.rangeAnchors = [];
+    clearRangeOverlay();
+  }
+}
+
 async function loadData() {
+  resetCustomRange();
   setStatus("Loading...");
   try {
     const baseQuery = `symbol=${state.symbol}&interval=${state.interval}&limit=500`;
@@ -577,6 +762,7 @@ function setupTimeframes() {
       e.currentTarget.classList.add("active");
       state.interval = e.currentTarget.dataset.tf;
       activeScenarioId = null;
+      setRangeMode(false);
       loadData();
     });
   });
@@ -589,6 +775,7 @@ function setupScales() {
       e.currentTarget.classList.add("active");
       state.scaleId = e.currentTarget.dataset.scale;
       activeScenarioId = null;
+      setRangeMode(false);
       loadData();
     });
   });
@@ -596,7 +783,11 @@ function setupScales() {
 
 function setupRefresh() {
   const btn = document.getElementById("btn-refresh");
-  if (btn) btn.addEventListener("click", () => loadData());
+  if (btn) btn.addEventListener("click", () => {
+    resetCustomRange();
+    setRangeMode(false);
+    loadData();
+  });
 }
 
 function setupEvidenceModal() {
@@ -610,10 +801,30 @@ function setupEvidenceModal() {
   }
 }
 
+function setupRangeSelection() {
+  if (rangeToggleBtn) {
+    rangeToggleBtn.addEventListener("click", () => setRangeMode(!state.rangeMode));
+  }
+  if (rangeResetBtn) {
+    rangeResetBtn.addEventListener("click", () => {
+      setRangeMode(false);
+      resetCustomRange();
+      loadData();
+    });
+  }
+  if (chartContainer) {
+    chartContainer.addEventListener("mousedown", handleRangeMouseDown);
+    chartContainer.addEventListener("mousemove", handleRangeMouseMove);
+  }
+  document.addEventListener("mouseup", handleRangeMouseUp);
+  document.addEventListener("mousemove", handleRangeMouseMove);
+}
+
 window.addEventListener("resize", () => {
   if (!chart) return;
   const size = chartContainer.getBoundingClientRect();
   chart.resize(Math.max(320, Math.floor(size.width)), Math.max(320, Math.floor(size.height)));
+  renderSelectedRange();
 });
 
 initChart();
@@ -621,4 +832,5 @@ setupTimeframes();
 setupScales();
 setupRefresh();
 setupEvidenceModal();
+setupRangeSelection();
 loadData();

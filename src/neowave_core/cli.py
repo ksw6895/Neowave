@@ -43,12 +43,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Similarity threshold for merging swings (default 0.33)",
     )
     parser.add_argument(
+        "--min-price-retrace-ratio",
+        type=float,
+        default=env_defaults.min_price_retrace_ratio,
+        help="Minimum price retrace ratio to confirm a swing (default 0.23)",
+    )
+    parser.add_argument(
+        "--min-time-ratio",
+        type=float,
+        default=env_defaults.min_time_ratio,
+        help="Minimum time retrace ratio to confirm a swing (default 0.33)",
+    )
+    parser.add_argument(
         "--api-key",
         dest="api_key",
         default=None,
         help="FMP API key (overrides FMP_API_KEY env var if provided)",
     )
     parser.add_argument("--max-scenarios", type=int, default=5, help="Maximum scenarios to display")
+    parser.add_argument("--max-pivots", type=int, default=5, help="Maximum anchor pivots to explore")
     parser.add_argument("--rules-path", default="rules/neowave_rules.json", help="Path to NEoWave rules JSON")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args(argv)
@@ -78,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
         df,
         price_threshold_pct=args.price_threshold,
         similarity_threshold=args.similarity_threshold,
+        min_price_retrace_ratio=args.min_price_retrace_ratio,
+        min_time_ratio=args.min_time_ratio,
     )
     logger.info("Using %s swings for scenario generation", len(swings))
 
@@ -85,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     scenarios = generate_scenarios(
         swings,
         rules,
+        max_pivots=args.max_pivots,
         max_scenarios=args.max_scenarios,
         current_price=current_price,
         settings=ParseSettings(similarity_threshold=args.similarity_threshold),

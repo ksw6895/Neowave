@@ -1,730 +1,603 @@
+## 0. 개요 – 현재 엔진의 구조적 한계
 
+### 0.1 확인된 핵심 문제
 
-# NEoWave Web – Trader-Grade Usability & Hierarchical Wave Mapping Spec (v0.2)
+1. **“데이터의 첫 캔들 = 파동의 시작점” 가정**
 
-## 0. 목적 및 범위
+   * `swings.detect_swings`는 **시계열의 0번 인덱스부터** 단방향으로 스윙을 생성합니다.
+   * `parser.parse_wave_tree → build_wave_leaves → _merge_pass`는 **스윙 리스트의 0번 요소부터** 순차적으로 패턴 매칭을 수행합니다.
+   * 결과적으로,
 
-이 문서는 현재 코드베이스(`neowave_core`, `neowave_web`)와 동봉된 문서를 기반으로,
+     * 0번째 캔들이 이미 진행 중인 하락/상승 파동의 **중간**이어도
+     * 엔진은 그 지점을 **무조건 1파 / A파 후보**로 가정하고 임펄스·조정 패턴을 억지로 맞추려 합니다.
+   * 이로 인해:
 
-* **실제 트레이더가 느낄 치명적인 사용성 문제 3가지**를 명시하고,
-* 이를 해결하기 위한 **엔진/스윙 감지/시나리오 스코어링/API/Web UI 전면 개선 방향**을 정의한다.
+     * 좌측 차트 초반부에 **이상한 파동 라벨이 몰리는 현상**
+     * “이미 끝난 이전 파동의 꼬리”를 강제로 새로운 파동의 1파로 해석하는 오류가 상시 발생합니다.
 
-목표는 이 도구를 “재미있는 장난감”이 아니라 **실제 매매 의사결정에 참고할 수 있는 NEoWave 분석 도구** 수준으로 끌어올리는 것이다.
+2. **Macro / Base / Micro 스케일의 완전한 분리**
 
----
+   * `api.get_scenarios`는 `detect_swings_multi_scale`로 복수 스케일의 스윙을 계산하지만,
+   * `generate_scenarios` 호출 시에는 **단일 `scale_id`의 스윙 리스트만** 사용합니다.
+   * 즉,
 
-## 1. 트레이더 관점에서의 치명적 사용성 문제 3가지
+     * Base 스케일에서 3파로 라벨링된 구간이
+     * Micro 스케일에서 실제로 **5개의 모노웨이브(impulse subdivision)를 갖는지** 전혀 검증되지 않습니다.
+   * NEoWave의 **“동일 차수 파동 간 비례성(rule of similarity & balance)”**, **“하위 파동의 구조적 검증”** 개념이 코드에 반영되어 있지 않습니다. 
 
-### 1.1 “숲을 보지 못하고 나무만 보여줌” – 계층적 맥락 부재
+3. **NEoWave 정량 규칙 미반영**
 
-현재 `generate_scenarios`는 **슬라이딩 윈도우 방식**으로, 최근 스윙 N개(3·5·7·11개)를 잘라 그 조각이 임펄스인지 지그재그인지만 판별한다.
+   * 첨부 문서에 정리된
 
-* **실제 사용자가 느끼는 문제:**
-
-  * “이 5파 상승 임펄스가,
-
-    * 거대한 하락장의 **반등 C파**인지,
-    * 아니면 대세 상승장의 **3파 시작**인지
-    * 화면 상에서 구분이 안 된다.”
-* **구조적 한계:**
-
-  * NEoWave의 핵심은 프랙탈 구조와 Degree(파동 등급)이다.
-  * 지금 구조는 “여기 5개 스윙이 임펄스처럼 보인다” 수준의 **로컬 패턴 탐지**에 머물러 있고,
-  * “현재 전체 사이클에서 우리가 어디쯤 와 있는지”에 대한 **Top-down Wave Map**이 없다.
-  * 결과적으로 사용자는 여러 시나리오 조각을 보고 **머릿속에서 다시 수동으로 큰 그림을 그려야** 하며, 자동화 도구의 장점이 반감된다.
-
-### 1.2 “스윙 감지 세팅에 따라 결과가 널뛰기” – 입력 변수 의존성
-
-`swings.py`에서 스윙 감지는 주로 `price_threshold_pct`(기본 1%)와 `similarity_threshold`(0.33)에 의존한다.
-
-* **실제 사용자가 느끼는 문제:**
-
-  * 1.0%로 스윙을 찍으면 임펄스가 나오는데,
-  * 1.2%로 바꾸면 스윙 하나가 사라지며 지그재그로 인식되는 등,
-  * **파라미터를 조금만 바꿔도 시나리오 결과가 완전히 바뀐다.**
-* **구조적 한계:**
-
-  * NEoWave 규칙(비율·채널링·복잡도 등)보다 앞 단계인 **Monowave(스윙) 정의**가 지나치게 단일 파라미터에 민감하다.
-  * 변동성이 커지거나 작아질 때, 사용자가 매번 눈으로 보고 “오늘은 1.5%로 잡아야겠다” 식으로 수동 튜닝을 하면,
-
-    * 분석의 **재현성/객관성**이 떨어지고,
-    * 시스템에 대한 신뢰도가 떨어진다.
-  * **시장 상황(변동성)에 따라 동적으로 스윙 스케일을 조절하거나**,
-    **복수의 스윙 스케일을 동시에 분석해서 더 일관된 패턴을 찾는 로직**이 없다.
-
-### 1.3 “점수만 있고 ‘왜?’가 없다” – 설명 가능성 부족
-
-현재 UI는 시나리오에 대해 `Score: 0.85` 정도의 숫자만 보여준다. 내부에서는 penalty와 rule 점검을 하고 있지만, 사용자에게는 드러나지 않는다.
-
-* **실제 사용자가 느끼는 문제:**
-
-  * “왜 85점인가?
-    3파가 연장되어서 점수가 높은 건지,
-    2파 조정 깊이가 이상적이라 그런 건지,
-    탈락한 시나리오는 어떤 규칙 하나 때문에 탈락했는지 알 수 없다.”
-* **구조적 한계:**
-
-  * 트레이딩은 돈이 걸린 영역이므로, **Black-box 알고리즘**은 신뢰받기 어렵다.
-  * 현재는 `penalty` -> `score`로 이어지는 수치만 있고,
-
-    * “3파 길이가 1파의 1.618배 조건에서 0.1% 부족 → 작은 패널티 부여”
-    * “4파가 1파 가격을 침범 → 임펄스 조건 위반”
-      같은 **규칙 단위의 설명(Which rule, pass/fail, by how much)이 전혀 노출되지 않는다.**
-  * 사용자는 이 프로그램이 내놓는 시나리오를 **참고는 할 수 있지만, 전적으로 믿고 포지션을 잡기 어려운 상태**다.
+     * **1/3 비례 규칙(가격·시간 33% 이상이면 동일 차수)**
+     * Zigzag / Flat / Triangle / Complex correction의 **정량 임계값 (61.8%, 38.2%, 161.8% 등)**
+     * **Impulse의 확장 규칙, 2–4 라인·채널·touch-point 규칙, Complexity cap(Triple Three 한계)**
+       가 엔진의 어떤 계층에서도 **사용되지 않습니다.** 
 
 ---
 
-## 2. 디자인 목표 – “장난감”에서 “실전 도구”로
+## 1. NEoWave 엔진 개선 사양서 v0.3+ (보강본)
 
-위 3가지 문제를 해결하기 위해, 다음 세 축을 중심으로 리팩토링한다.
+**목표 세 축**
 
-1. **Top-Down 계층 분석**
-
-   * 슬라이딩 윈도우 조각에 머무르지 않고,
-   * **상위 파동(부모)–현재 파동–하위 파동(자식)**을 구조적으로 표현하는 Wave Map을 제공한다.
-2. **적응형/다중 스케일 스윙 감지**
-
-   * 단일 `price_threshold_pct`에 대한 민감도를 줄이고,
-   * 변동성 기반 동적 임계값 또는 다중 스윙 스케일을 동시에 운용한다.
-3. **설명 가능한 점수 & 규칙 X-Ray**
-
-   * 각 시나리오의 점수가 어떤 규칙들에 의해 결정되었는지,
-   * 어떤 규칙은 통과했고, 어떤 규칙은 아슬아슬했는지,
-   * **머신/인간 모두가 읽을 수 있는 형태의 규칙 근거를 제공**한다.
-
-이제 각 축을 구현하기 위한 구체적인 변경 사항을 정의한다.
+1. **맹목적 시작점 제거** – Smart Anchoring & Swing Normalization
+2. **계층적 통합 분석** – Macro/Base/Micro 간 구조적 일관성 확보
+3. **인터랙티브 분석 & 정사각형(Time–Price) 검증 강화** – 사용자 가설 반영 + NEoWave 정량 규칙 내재화
 
 ---
 
-## 3. 현재 시스템 요약 (Baseline)
+## 2. 엔진 코어 개선 – Smart Anchoring & Swing Normalization
 
-### 3.1 엔진(`neowave_core`)
+### 2.1 Monowave 정규화 (NEoWave 스윙 기준 반영)
 
-* `swings.detect_swings`:
+**요구사항**
 
-  * `price_threshold_pct`, `similarity_threshold` 등으로 monowave(스윙)를 추출.
-* `patterns/*.py`:
+1. **스윙 분해 기준을 NEoWave 규칙에 맞게 재정의**
 
-  * `impulse`, `terminal_impulse`, `triangle`, `zigzag`, `flat`, `double_three`, `triple_three` 등
-  * 각 패턴별로 규칙 점검 및 penalty/score 계산 로직 존재.
-* `scenarios.generate_scenarios`:
+   * 첨부 문서에서 제안하는 방식:
 
-  * 스윙 시퀀스에 대해 3/5/7/11개의 슬라이싱 윈도우를 돌며 각 패턴을 시험.
-  * 통과하는 시나리오에 대해
+     * **역추세 움직임이 직전 스윙의 최소 23–38% 이상**일 때 새로운 모노웨이브로 간주. 
+     * 또는 **가격·시간 중 최소 하나가 33% 이상(1/3 rule)**이면 동일 차수의 새로운 파동으로 인정.
+   * 구현 방향:
 
-    * `pattern_type`, `score`, `weighted_score`, `swing_indices`, `textual_summary`,
-      `invalidation_levels`, `details`, `in_progress` 등을 dict로 생성.
-  * `weighted_score` 기준으로 정렬 후 상위 `max_scenarios` 반환.
+     * `detect_swings`에서 **고정 % threshold** 대신
 
-### 3.2 API(`neowave_web/api.py`, `schemas.py`)
+       * `price_retrace_ratio ≥ 0.23 ~ 0.33`
+       * 또는 `time_ratio ≥ 0.33`
+         를 만족할 때만 새로운 스윙으로 확정.
+     * 너무 작은 스윙은 이후 단계 `merge_small_swings`에서 **자동 병합**.
 
-* `GET /api/ohlcv` → 캔들 데이터.
-* `GET /api/swings` → 스윙 목록.
-* `GET /api/scenarios` → `ScenarioOut` 리스트.
-* `ScenarioOut`:
+2. **“적정 모노웨이브 개수” 유도**
 
-  * `pattern_type`, `score`, `swing_indices`, `textual_summary`,
-    `invalidation_levels`, `details`, `in_progress` 정도만 포함.
+   * NEoWave는 신뢰도 있는 파동 카운팅을 위해 **바 차트에 30–60개 수준의 monowave**가 보이는 타임 프레임·축비를 권고합니다. 
+   * 엔진 레벨에서:
 
-### 3.3 Web UI(`static/index.html`, `static/app.js`)
+     * 분석 구간 안에 모노웨이브가 15개 미만이면 → **스윙 threshold를 완화** (더 많이 쪼갬)
+     * 80개 이상이면 → threshold를 강화하여 **노이즈 스윙을 병합**
 
-* LightweightCharts로 캔들 차트 렌더링.
-* 스윙 끝점에 `S1, S2, ...` 마커 표시.
-* 오른쪽 패널에 시나리오 카드 목록 표시.
-* 카드 클릭 시:
-
-  * 해당 `swing_indices` 구간 스윙들만 다시 라벨링.
-  * Invalidation 레벨을 수평선으로 표시.
-  * 단순 projection 라인만 추가.
-* **Wave Box, 계층 트리, 규칙 X-Ray UI는 없음.**
+> 요약: `detect_swings`는 “NEoWave식 모노웨이브 시퀀스”를 생성하도록 재설계하고, 이를 후속 Smart Anchoring·패턴 인식의 공통 입력으로 사용합니다.
 
 ---
 
-## 4. 엔진 개선 – WaveBox & WaveTree & Rule X-Ray
+### 2.2 Anchor 후보 자동 탐색 – `identify_major_pivots`
 
-### 4.1 WaveBox: “어디부터 어디까지를 하나의 파동으로 봤는가?”
+**목적**
+“데이터의 첫 캔들 = 파동 0번”이라는 가정을 버리고,
+**“시장이 실제로 중요하게 인식한 Pivot(고점·저점)”**을 기준으로 파동 시작점을 탐색합니다.
 
-#### 4.1.1 데이터 구조
-
-```python
-# src/neowave_core/wave_box.py
-
-from dataclasses import dataclass
-from datetime import datetime
-
-@dataclass(slots=True)
-class WaveBox:
-    swing_start: int   # inclusive
-    swing_end: int     # inclusive
-
-    time_start: datetime
-    time_end: datetime
-
-    price_low: float
-    price_high: float
-```
-
-#### 4.1.2 생성 헬퍼
+**알고리즘 스펙 (의사 코드 수준)**
 
 ```python
-from typing import Sequence
-
-def compute_wave_box(swings: Sequence["Swing"], start_idx: int, end_idx: int) -> WaveBox:
-    window = swings[start_idx : end_idx + 1]
-    time_start = window[0].start_time
-    time_end = window[-1].end_time
-    price_low = min(s.low for s in window)
-    price_high = max(s.high for s in window)
-    return WaveBox(
-        swing_start=start_idx,
-        swing_end=end_idx,
-        time_start=time_start,
-        time_end=time_end,
-        price_low=price_low,
-        price_high=price_high,
-    )
+def identify_major_pivots(swings, max_pivots=5):
+    """
+    Input : 동일 차수로 정규화된 Swing 리스트
+    Output: Anchor로 사용할 pivot 인덱스 리스트 (중요도 순 정렬)
+    """
+    for each swing i:
+        price_score  = abs(sw[i].delta_price) / avg_abs_delta
+        time_score   = sw[i].duration       / avg_duration
+        volume_score = sw[i].volume_sum     / avg_volume  # 선택적
+        # NEoWave Thermodynamic Balance: 가격·시간·거래량이 모두 큰 구간을 우선시
+        energy_score = price_score * max(time_score, 1.0)
+        # 지나치게 얇은 스윙(시간/가격 비율 극단)을 패널티
+        shape_penalty = f_aspect_ratio(sw[i])
+        pivot_score = w_price*price_score + w_time*time_score \
+                      + w_vol*volume_score + w_energy*energy_score \
+                      - w_shape*shape_penalty
+    상위 max_pivots개 인덱스를 중요도 순으로 반환
 ```
 
-> 이 구조는: “이 시나리오가 차트 상에서 **어느 시간/가격 박스를 하나의 파동으로 인식했는지**”를 일관되게 표현하는 최소 단위이다.
+**핵심 포인트**
 
-### 4.2 WaveTree: 계층적 파동 트리
-
-#### 4.2.1 데이터 구조
-
-```python
-# src/neowave_core/wave_tree.py
-
-from dataclasses import dataclass, field
-
-@dataclass(slots=True)
-class WaveNode:
-    id: str              # "primary", "1", "2", "A", "W" 등
-    label: str           # 화면에 표시할 라벨
-    pattern_type: str    # "impulse", "zigzag", ...
-    direction: str | None  # "up", "down", None
-    degree: int          # 0: 스윙 레벨, 1: 그 위, ... (NEoWave Degree와 매핑 가능)
-
-    swing_start: int
-    swing_end: int
-
-    children: list["WaveNode"] = field(default_factory=list)
-```
-
-#### 4.2.2 1차 구현 범위 (필수)
-
-각 시나리오에 대해 최소한 다음을 보장한다.
-
-* 루트 WaveNode (degree 1):
-
-  * `label = pattern_type` (예: "IMPULSE", "ZIGZAG")
-  * `swing_start/end = 시나리오 swing_indices`
-  * direction: 전체 창에서 상승/하락 판단.
-* 1단계 자식 WaveNode들 (degree 0):
-
-  * Impulse/Terminal: 5개 노드 → label "1"~"5"
-  * Zigzag/Flat: 3개 노드 → "A","B","C"
-  * Triangle: 5개 노드 → "A"~"E"
-  * Double three(7 swing): 7개 노드, 단순 3-1-3 구조로 "W","X","Y"를 매핑
-  * Triple three(11 swing): 11개 노드, "W","X","Y","X","Z" 패턴에 따라 매핑
-
-즉, 초기 단계에서는 **“스윙 N개 = 최상위 Sub-wave N개”**로 단순 매핑하되, 구조 자체는 계층형으로 구현한다(후속 단계에서 하위 Degree 파동을 재귀적으로 추가 가능하도록).
-
-#### 4.2.3 2차 구현 범위 (선택: 진짜 Top-Down/Bottom-Up 계층 구축)
-
-* `build_wave_tree(swings, swing_indices, pattern_type, details)` 내에서:
-
-  * 시나리오 window 내부 스윙에 대해,
-  * NEoWave 규칙을 사용하여:
-
-    * 더 작은 Impulse, Zigzag, Triangle 등을 재귀적으로 탐색하고,
-    * 작은 패턴부터 상위로 차례로 압축(compress)하여 Degree를 올려가는 구조를 구축.
-* 제약:
-
-  * 탐색 영역은 **해당 시나리오 window로 한정**.
-  * Degree 최대 깊이를 설정(예: 0–3).
-  * 패턴 후보가 많을 경우 score 기반으로 상위 몇 개 구조만 유지.
-
-> 이 단계는 구현 난이도가 높으므로, 코드 에이전트에게 **1차 구현(Flat Tree) → 2차(진짜 계층 트리)**로 나누어 작업하도록 명시하는 것이 좋다.
-
-### 4.3 Rule X-Ray: 규칙 단위 근거 구조화
-
-#### 4.3.1 RuleCheck 구조
-
-엔진 내부에서 규칙 평가 결과를 다음과 같이 구조화한다.
-
-```python
-from dataclasses import dataclass
-
-@dataclass(slots=True)
-class RuleCheck:
-    key: str              # "wave2_retrace", "wave3_extension", ...
-    description: str      # 인간용 설명 (옵션)
-    value: float | bool | str
-    expected: str         # "0.24–1.0", ">= 1.618", "must be True" 등
-    passed: bool
-    penalty: float        # 이 규칙으로 인한 패널티 (0이면 통과)
-```
-
-각 패턴 모듈(예: `triangle.py`, `impulse.py`)에서,
-
-* 규칙 평가 시 `RuleCheck` 객체를 생성하고,
-* 시나리오 `details["rule_checks"]` 리스트로 모은다.
-
-#### 4.3.2 Scenario dict 확장
-
-`generate_scenarios` 내부의 `add_scenario(...)` 로직을 다음과 같이 확장한다.
-
-```python
-from .wave_box import compute_wave_box
-from .wave_tree import WaveNode, build_wave_tree
-
-def infer_wave_labels(pattern_type: str, swing_indices: tuple[int, int]) -> list[str]:
-    # window 길이와 pattern_type prefix를 토대로
-    # ["1","2","3","4","5"] / ["A","B","C"] / ["A"~"E"] / ["W","X","Y", ...] 등 리턴
-    ...
-
-def build_rule_evidence(pattern_type: str, details: dict) -> list[dict]:
-    # details["rule_checks"]에 RuleCheck 리스트가 있다고 가정하고,
-    # 이를 JSON-직렬화 가능한 dict array로 변환
-    # (엔진 내부 상세 표현은 자유)
-    ...
-
-def add_scenario(...):
-    ...
-    start_idx, end_idx = swing_indices
-    box = compute_wave_box(swings, start_idx, end_idx)
-    wave_labels = infer_wave_labels(pattern_type, swing_indices)
-    wave_tree = build_wave_tree(swings, swing_indices, pattern_type, details)
-
-    scenarios.append(
-        {
-            "pattern_type": pattern_type,
-            "score": score,
-            "weighted_score": weighted_score,
-            "swing_indices": swing_indices,
-            "textual_summary": summary,
-            "invalidation_levels": invalidation,
-            "details": details or {},
-            "in_progress": in_progress,
-            # 신규 필드
-            "wave_box": serialize_wave_box(box),
-            "wave_labels": wave_labels,
-            "wave_tree": serialize_wave_tree(wave_tree),
-            "rule_evidence": build_rule_evidence(pattern_type, details),
-        }
-    )
-```
+* **가격·시간·에너지(=가격×시간 또는 가격×거래량)**가 모두 의미 있는 스윙을 우선 앵커로 선정 → NEoWave의 “Thermodynamic Balance” 개념 반영. 
+* 극단적으로 **길쭉한 바늘형/납작한 스윙**은 정사각형 비율 규칙에서 불리한 점수 부여(아래 §4 참조).
 
 ---
 
-## 5. 스윙 감지 개선 – Multi-Scale & Adaptive Swings
+### 2.3 Multi-Anchor 시나리오 생성 & 점수화
 
-이 섹션은 **문제 1.2(스윙 민감도)**를 직접 겨냥한다.
+**AS-IS**
 
-### 5.1 다중 스윙 스케일 구조
+* `generate_scenarios(swings)`
+  → `swings[0]`에서 시작해 한 번의 `parse_wave_tree`만 수행
+  → “왼쪽 끝에서부터 강제 카운팅”만 존재
 
-#### 5.1.1 Config 예시
+**TO-BE**
 
-```python
-# src/neowave_core/config.py
+1. **Anchor 세트 정의**
 
-SWING_SCALES = [
-    {"id": "macro", "price_threshold_pct": 2.5, "similarity_threshold": 0.4},
-    {"id": "base",  "price_threshold_pct": 1.0, "similarity_threshold": 0.33},  # 기존 기본값
-    {"id": "micro", "price_threshold_pct": 0.5, "similarity_threshold": 0.3},
-]
-```
+   * 입력:
 
-#### 5.1.2 SwingSet 구조
+     * `major_pivots = identify_major_pivots(swings, K)`
+     * (옵션) **사용자 선택 구간의 시작/저점**도 Anchor 후보에 추가 (뒤의 custom-range와 연계).
+   * Anchor 후보 예:
 
-```python
-from dataclasses import dataclass
-from typing import Sequence
+     * 전체 구간의 주요 저점 3개 + 주요 고점 2개 = 최대 5개
 
-@dataclass(slots=True)
-class SwingSet:
-    scale_id: str               # "macro", "base", "micro"
-    swings: Sequence["Swing"]
-```
+2. **Anchor별 시나리오 생성**
 
-`detect_swings_multi_scale(ohlcv)`:
+   ```python
+   for anchor_idx in major_pivots:
+       local_swings = swings[anchor_idx : ]
+       scenario = parse_wave_tree(local_swings)
+       score    = score_scenario_with_neowave_rules(scenario)
+       scenarios.append((anchor_idx, scenario, score))
+   ```
 
-* 위 `SWING_SCALES`에 정의된 각 스케일에 대해 `detect_swings`를 실행.
-* `dict[scale_id, SwingSet]` 혹은 `list[SwingSet]` 형태로 반환.
+3. **NEoWave 규칙 기반 스코어링 – `score_scenario_with_neowave_rules`**
 
-### 5.2 시나리오 분석 시 스케일 전략
+   * **Hard rule (위반 시 즉시 invalid)**
 
-#### 5.2.1 기본 전략
+     * Impulse
 
-* **Base 스케일**을 메인 분석 스케일로 사용 (`scale_id="base"`).
-* 시나리오 생성 시:
+       * 2파 ≥ 100% 1파, 3파가 1·3·5 중 최단, 1.618배 확장 부재 등. 
+     * Zigzag / Flat / Triangle / Combo
 
-  * Base 스케일에서 슬라이딩 윈도우로 시나리오 후보 생성.
-  * 동일 구간(시간, swing index)을 macro/micro에서도 확인하여 **컨텍스트 보정**:
+       * Flat의 B < 61.8% A, Zigzag의 B > 61.8% A, Triangle의 C > A 등.
+     * Complexity cap
 
-예시:
+       * W–X–Y–X–Z 이상 구조(4번째 X-wave) 등장 시 해당 시나리오 폐기. 
 
-* Base 스케일: 5-swing impulse 후보.
-* Macro 스케일: 같은 기간에 “단일 큰 스윙” 또는 “단순 조정”으로 인식.
-* Micro 스케일: 내부에 여러 작은 임펄스/조정이 포함되어 있음.
+   * **Soft rule (위반 시 감점)**
 
-이 정보를 이용하여:
+     * **Rule of Similarity & Balance**
 
-* Macro 스케일이 강한 하락 임펄스 내 조정 구간으로 보이면,
+       * 동일 차수 인접 파동의 가격·시간 비가 **0.33 미만**이면 패널티. 
+     * Impulse의 비확장 파동 간 Equality(1·5 파 동등성), 2·4파 Alternation(깊이/형태·시간의 상반성). 
+     * Time–Price Equality
 
-  * 현재 임펄스가 **상위 Degree에서 C파가 될 가능성**이 높다고 판단.
-* Micro 스케일이 너무 복잡하고 noisy하면,
+       * 큰 충격파 이후 조정이 가격 또는 시간 면에서 **0.33 미만으로 너무 짧으면** 감점.
 
-  * 해당 시나리오의 신뢰도를 약간 낮추는 penalty 추가.
+   * **복잡도 패널티**
 
-#### 5.2.2 API 연계 (선택)
+     * 동일 데이터를 설명하는 두 시나리오가 있을 때
 
-* `/api/swings`에 `scale_id` 파라미터 추가:
+       * 더 많은 패턴 조합(Triple Three 등)을 쓰는 시나리오에는 복잡도 패널티 부여.
+       * NEoWave의 “가능한 한 **가장 단순한 패턴**을 우선 채택” 논리 구현. 
 
-  * 기본: `scale_id=base`
-  * 추가 옵션: `macro`, `micro`
-* `/api/scenarios` 요청 시:
+4. **최종 채택 전략**
 
-  * `scale_id`로 메인 분석 스케일 지정.
-  * 응답의 각 시나리오에:
+   * **기본 출력**: Hard rule 위반이 0개이면서,
 
-    * `scale_id` 필드 추가.
-    * 옵션으로 `parent_scale_id`/`child_scale_summary` 포함 (상위/하위 스케일에서의 간단한 텍스트 요약).
+     * 전체 score가 최대인 시나리오 1개
+   * **대안 시나리오**:
 
----
+     * 상위 N개(예: 2~3개)를 “alternative”로 함께 반환
+     * 각 시나리오마다 “주요 무효화 조건(invalidation condition)”을 같이 제공
+       (예: “가격이 X를 돌파하면 이 카운트는 폐기”)
 
-## 6. API 스키마 확장
-
-### 6.1 신규 Pydantic 모델
-
-```python
-# src/neowave_web/schemas.py
-
-from pydantic import BaseModel
-from datetime import datetime
-from typing import Any
-
-class WaveBoxOut(BaseModel):
-    swing_start: int
-    swing_end: int
-    time_start: datetime
-    time_end: datetime
-    price_low: float
-    price_high: float
-
-
-class WaveNodeOut(BaseModel):
-    id: str
-    label: str
-    pattern_type: str
-    direction: str | None = None
-    degree: int | None = None
-    swing_start: int
-    swing_end: int
-    children: list["WaveNodeOut"] = []
-
-
-class RuleEvidenceItem(BaseModel):
-    key: str
-    value: float | bool | str
-    expected: str | None = None
-    passed: bool | None = None
-    penalty: float | None = None
-
-
-class ScenarioOut(BaseModel):
-    pattern_type: str
-    score: float
-    swing_indices: tuple[int, int]
-    textual_summary: str
-    invalidation_levels: dict[str, float] | None = None
-    details: dict[str, Any] | None = None
-    in_progress: bool | None = None
-
-    # 신규 필드
-    scale_id: str | None = None
-    wave_box: WaveBoxOut | None = None
-    wave_labels: list[str] | None = None
-    wave_tree: WaveNodeOut | None = None
-    rule_evidence: list[RuleEvidenceItem] | None = None
-```
-
-> 순환 참조를 위해 모듈 끝에서 `WaveNodeOut.model_rebuild()` 호출 필요.
-
-### 6.2 엔드포인트 변경 요약
-
-* `GET /api/swings`
-
-  * Query: `scale_id`(optional, default="base").
-* `GET /api/scenarios`
-
-  * Query: `scale_id`(optional).
-  * Response: `ScenarioOut[]` (위 신규 필드 포함).
+> 결과적으로, 엔진은 “데이터 시작점에 억지로 맞춘 유일한 시나리오”가 아니라,
+> **“여러 유효 Anchor 중에서 NEoWave 규칙을 가장 잘 만족하는 시나리오”**를 제시하게 됩니다.
 
 ---
 
-## 7. Web UI 개선 – Wave Box, Context, Rule X-Ray
+## 3. 계층 통합 분석 – Macro/Base/Micro 연결
 
-### 7.1 Wave Box 오버레이 레이어
+### 3.1 구조 개념
 
-`index.html`의 차트 영역에 wave box를 위한 겹치는 레이어 추가:
+* **Macro/Base/Micro 스케일을 “동일 이론, 다른 해상도”**로 보고,
+* 상위 파동이 하위 파동의 구조로 **검증/감점/무효화**되도록 설계합니다.
 
-```html
-<main class="panel chart-container">
-  <div class="chart-overlay">
-    <div class="chart-title" id="chart-symbol">BTC/USD</div>
-  </div>
-  <div id="tv-chart"></div>
-  <div id="wave-overlay-layer" class="wave-overlay-layer"></div>
-</main>
-```
+### 3.2 Bottom-Up Verification (하향식 + 상향식 혼합 검증)
 
-CSS 예시:
+1. **Base 파동을 정의한 뒤 Micro 재검증**
 
-```css
-.wave-overlay-layer {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
+   * 예시: Base 스케일에서
 
-.wave-box {
-  position: absolute;
-  border: 1px solid rgba(0, 242, 255, 0.5);
-  background: rgba(0, 242, 255, 0.08);
-  box-shadow: 0 0 12px rgba(0, 242, 255, 0.2);
-  border-radius: 6px;
-}
+     * 특정 구간이 **Impulse 3파**로 라벨링되었다면,
 
-.wave-box-label {
-  position: absolute;
-  top: 2px;
-  left: 4px;
-  font-size: 10px;
-  font-family: "JetBrains Mono", monospace;
-  color: #00f2ff;
-}
-```
+   * 그 구간에 대해 Micro 스윙을 불러와:
 
-### 7.2 app.js – Wave Box 그리기
+     * `is_valid_impulse(micro_swings_subseq)`를 실제 NEoWave 규칙으로 검사
 
-```js
-const waveOverlayEl = document.getElementById("wave-overlay-layer");
-let activeWaveBoxes = [];
+       * 5개 모노웨이브,
+       * 3파 확장 여부,
+       * 2·4파 가격·시간·구조 alternation,
+       * 2–4 Trendline & post-impulse 2–4 라인 브레이크 등. 
 
-function clearWaveBoxes() {
-  if (!waveOverlayEl) return;
-  waveOverlayEl.innerHTML = "";
-  activeWaveBoxes = [];
-}
+   * **만약**
 
-function drawWaveBoxForScenario(scenario) {
-  if (!chart || !waveOverlayEl || !scenario.wave_box) return;
+     * Micro 내부가 3-wave(zigzag 형태)만 보인다면
 
-  const box = scenario.wave_box;
-  const timeScale = chart.timeScale();
-  const priceScale = chart.priceScale("right");
+       * Base 3파에 **강한 감점 또는 invalid** 처리.
 
-  const t1 = Math.floor(new Date(box.time_start).getTime() / 1000);
-  const t2 = Math.floor(new Date(box.time_end).getTime() / 1000);
-  const x1 = timeScale.timeToCoordinate(t1);
-  const x2 = timeScale.timeToCoordinate(t2);
-  const y1 = priceScale.priceToCoordinate(box.price_high);
-  const y2 = priceScale.priceToCoordinate(box.price_low);
+2. **패턴별 cross-scale 규칙 예시**
 
-  if (x1 == null || x2 == null || y1 == null || y2 == null) return;
+   * Base: Zigzag A파
+     → Micro: A파는 반드시 **5파 구조(Impulse 또는 Leading diagonal)**여야 함.
+   * Base: Flat B파
+     → Micro: B파 내부는 3-3 구조이며, retracement 비율(61.8–138.2%)과 시간 규칙을 만족해야 함. 
+   * Base: Triangle (Contracting)
+     → Macro 스윙에서 수렴형이지만, 각 A–E leg 내부 Micro에서 **모두 조정파(3-3 구조)**가 나와야 함.
 
-  const left = Math.min(x1, x2);
-  const width = Math.abs(x2 - x1);
-  const top = Math.min(y1, y2);
-  const height = Math.abs(y2 - y1);
+3. **Rule of Similarity & Balance – 스케일 간 일관성**
 
-  const div = document.createElement("div");
-  div.className = "wave-box";
-  div.style.left = `${left}px`;
-  div.style.top = `${top}px`;
-  div.style.width = `${width}px`;
-  div.style.height = `${height}px`;
+   * NEoWave: 동일 차수 파동은 인접 파동 대비 **가격/시간 33% 이상**이어야 합니다. 
+   * 엔진 구현:
 
-  const label = document.createElement("div");
-  label.className = "wave-box-label";
-  label.textContent = scenario.pattern_type.replace(/_/g, " ").toUpperCase();
+     * Macro/Base/Micro 각각에 대해 이 규칙을 적용하고,
+     * 상위 차수 파동의 길이·시간이 하위 차수 평균의 **정수배 수준(대략 3~5배)**에 위치하도록 점수화.
+     * 지나치게 “스케일 불연속(예: Base 한 파동이 Micro 파동 2~3개에 불과)”이면 감점.
 
-  div.appendChild(label);
-  waveOverlayEl.appendChild(div);
-  activeWaveBoxes.push(div);
-}
-```
+### 3.3 데이터 구조 확장 – `WaveNode.sub_scale_analysis`
 
-### 7.3 Scenario 강조 로직 확장
+`src/neowave_core/models.py`:
 
-기존 `highlightScenario`를 수정:
-
-```js
-function highlightScenario(scenario) {
-  clearPriceLines();
-  clearWaveBoxes();
-  drawProjection(scenario);
-
-  if (!scenario || !Array.isArray(state.swings)) {
-    renderBaseSwingMarkers();
-    return;
-  }
-
-  // Wave Box
-  if (scenario.wave_box) {
-    drawWaveBoxForScenario(scenario);
-  }
-
-  const [startIdx, endIdx] = scenario.swing_indices || [0, -1];
-  const subset = state.swings.slice(startIdx, endIdx + 1);
-  if (!subset.length) {
-    renderBaseSwingMarkers();
-    return;
-  }
-
-  const labelsFromScenario = Array.isArray(scenario.wave_labels)
-    ? scenario.wave_labels
-    : scenarioWaveLabels(subset.length);
-
-  const markers = subset.map((swing, idx) => ({
-    time: swing.end_ts,
-    position: swing.direction === "up" ? "belowBar" : "aboveBar",
-    color: swing.direction === "up" ? "#00f2ff" : "#ff0055",
-    shape: swing.direction === "up" ? "arrowUp" : "arrowDown",
-    text: `${labelsFromScenario[idx] || ""} ${Number(swing.end_price).toFixed(2)}`,
-  }));
-
-  candleSeries.setMarkers(markers);
-  drawInvalidations(scenario.invalidation_levels);
-}
-```
-
-### 7.4 Rule X-Ray UI
-
-Scenario 카드 아래에 “Rule X-Ray” 토글 추가:
-
-```js
-function renderScenariosList(scenarios) {
-  const container = document.getElementById("scenarios");
-  container.innerHTML = "";
-
-  scenarios.forEach((sc, idx) => {
-    const card = document.createElement("div");
-    card.className = "scenario-card";
-
-    const hasEvidence = Array.isArray(sc.rule_evidence) && sc.rule_evidence.length > 0;
-
-    card.innerHTML = `
-      <div class="sc-header">
-        <span class="sc-type">${sc.pattern_type.replace(/_/g, " ").toUpperCase()}</span>
-        <span class="sc-score">${(sc.score * 100).toFixed(0)}%</span>
-      </div>
-      <div class="sc-summary">${sc.textual_summary}</div>
-      <div class="sc-meta">
-        Swings ${sc.swing_indices?.[0]} – ${sc.swing_indices?.[1]}
-        ${sc.scale_id ? ` | scale: ${sc.scale_id}` : ""}
-      </div>
-      ${hasEvidence ? `<div class="sc-evidence-toggle" data-idx="${idx}">Rule X-Ray ▶</div>` : ""}
-    `;
-
-    card.addEventListener("click", () => {
-      state.activeScenarioIndex = idx;
-      highlightScenario(sc);
-    });
-
-    if (hasEvidence) {
-      const toggle = card.querySelector(".sc-evidence-toggle");
-      toggle.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openEvidenceModal(sc.rule_evidence);
-      });
+```python
+class WaveNode(BaseModel):
+    id: int
+    label: str              # 1,2,3,4,5 또는 A,B,C 등
+    pattern_type: str       # Impulse, Zigzag, Flat, Triangle, Combo...
+    children: list["WaveNode"]  # 동일 스케일 내 subdivision
+    # 추가 필드
+    sub_scale_analysis: dict | None = None
+    """
+    예시:
+    {
+      "scale": "micro",
+      "swings": [...],           # 해당 구간 micro swings 요약
+      "pattern": {...},          # micro에서 찾은 패턴 구조(JSON)
+      "score": float,            # micro 레벨 NEoWave 규칙 적합도
+      "violations": [...],       # 위반된 규칙 리스트
     }
+    """
+```
 
-    container.appendChild(card);
-  });
-}
+* Base 레벨 3파 Node를 클릭하면
 
-function openEvidenceModal(evidence) {
-  // 간단한 모달 또는 사이드 패널에
-  // key / value / expected / passed / penalty를 테이블로 렌더링
+  * `sub_scale_analysis.pattern`의 구조를 시각화하여
+  * Micro 레벨의 실제 1·2·3·4·5 파동 (혹은 조정 구조)을 오버레이할 수 있게 합니다.
+
+---
+
+### 3.4 UI Drill-down 설계
+
+Frontend (`app.js` + LightweightCharts):
+
+1. 파동 박스(예: Base 3파)를 클릭 시:
+
+   * 해당 WaveNode ID로 `/api/wave/{id}/detail` 호출
+   * 응답으로 Micro 패턴 구조를 수신
+   * 동일 차트 상에 **반투명 레이어**로 Micro 파동 카운트 overlay
+
+2. 툴팁에 표시:
+
+   * “이 Base 3파 내부 Micro 구조: Impulse(확장 3파), score 0.92 / 1.0, Rule violation 0개”
+   * 또는 “Micro 구조: Zigzag(3파), Base Impulse 가설과 불일치 → scenario penalty -0.3”
+
+---
+
+## 4. 인터랙티브 분석 – Custom Range & Anchor Override
+
+### 4.1 Frontend 인터랙션
+
+1. 새로운 도구:
+
+   * 차트 상단: `[영역 분석]` 토글 버튼
+   * 활성화 시: 마우스 드래그로 **임의 구간 선택(시간 범위)**
+
+2. 동작:
+
+   * 선택 구간의 `startTime`, `endTime`(Unix timestamp 혹은 ISO) 추출
+   * 현재 심볼/타임프레임과 함께 `POST /api/analyze/custom-range`로 전송
+
+### 4.2 Backend API – `/api/analyze/custom-range`
+
+**스펙**
+
+* Endpoint: `POST /api/analyze/custom-range`
+* Input(JSON):
+
+```json
+{
+  "symbol": "BTCUSDT",
+  "interval": "1h",
+  "start_ts": 1700000000,
+  "end_ts":   1700500000,
+  "max_pivots": 5,       // optional
+  "max_scenarios": 3     // optional
 }
 ```
 
-이렇게 하면 사용자는:
+* Logic:
 
-* 점수 숫자만 보지 않고,
-* 각 규칙이 어떻게 평가되었는지,
-* 어떤 규칙이 약간 위반되었는지까지 확인 가능하다.
+  1. 전체 데이터셋에서 해당 구간만 **슬라이스**
+  2. 슬라이스된 구간에서 다시 `detect_swings → merge_small_swings`
+  3. `identify_major_pivots`로 Anchor 후보 생성하되,
 
----
+     * **필수 Anchor**로 “선택 구간 내 첫 번째 local 저점(or 고점)”을 하나 포함 (사용자 직관 반영)
+  4. 위에서 정의한 **Multi-Anchor + NEoWave Rule Scoring** 파이프라인 실행
+  5. 상위 N개 시나리오와 각 시나리오의
 
-## 8. 테스트 및 검증 계획
+     * score
+     * invalidation 조건
+     * 주요 패턴 설명을 JSON으로 반환
 
-1. **엔진 단위 테스트**
+**이점**
 
-   * `compute_wave_box`가 스윙 window의 min/max 가격과 시간 범위를 정확히 반영하는지 검증.
-   * 각 패턴에 대해:
+* 사용자가 “여기가 1파 시작처럼 보인다”는 영역을 직접 표시하면,
 
-     * synthetic 스윙 시퀀스를 만들어,
-     * `wave_labels`, `wave_tree`, `rule_evidence` 구조가 예측과 일치하는지 확인.
+  * 엔진은 **그 가설을 Anchor 후보로 강제 포함**시켜
+  * NEoWave 규칙 하에서 가장 일관된 카운트를 찾아 줍니다.
+* 시스템은 여전히 다른 Anchor 시나리오도 함께 계산해
 
-2. **다중 스윙 스케일 테스트**
-
-   * 동일 ohlcv 데이터에 대해 `macro`, `base`, `micro` 세 스케일 결과를 비교.
-   * extreme case(고변동/저변동)에서 단일 스케일보다 더 일관된 시나리오가 나오는지 검토.
-
-3. **API 테스트**
-
-   * `/api/scenarios` 응답에 신규 필드들이 포함되는지, optional 필드로 backward compatible한지 확인.
-   * `scale_id` 쿼리 파라미터가 정상 동작하는지 검증.
-
-4. **UI 수동 테스트**
-
-   * BTCUSD H1에서 2–3개의 대표적 구간(상승 임펄스, 복잡한 조정, 삼각수렴)을 골라:
-
-     * Wave Box 위치,
-     * Wave labels(1–5, A–C, A–E),
-     * Rule X-Ray 내용을 육안으로 점검.
+  * “사용자 가설 vs 시스템 최적 시나리오”를 비교 가능하게 합니다.
 
 ---
 
-## 9. 정리 – 문제 3가지와 개선안 매핑
+## 5. 정사각형(Time–Price Balance) & 에너지 검증 강화
 
-1. **계층 맥락 부재 (“숲을 못 본다”)**
+### 5.1 Box Ratio – 파동 정사각형성 평가
 
-   * 해결 방향:
+각 WaveNode 혹은 Swing에 대해, 다음과 같은 **Bounding Box**를 정의합니다.
 
-     * `WaveBox` + `WaveTree`를 도입하여,
-     * 각 시나리오를 시간·가격 박스로 묶고,
-     * 그 안의 sub-wave 구조를 계층적으로 표현.
-   * 후속 단계:
+* 높이: `price_range = |high - low|`
+* 너비: `time_range  = end_time - start_time`
+* 비율: `aspect_ratio = price_range / (k * time_range)`
 
-     * 다중 스윙 스케일 + 계층 트리로 상위 Degree와 연결하면
-       “지금 파동이 전체 사이클에서 어느 위치인지”에 더 가까운 그림을 얻을 수 있음.
+  * `k`는 종목·타임프레임별 스케일 상수 (예: 로그 스케일 고려)
 
-2. **스윙 감지 민감도 문제**
+**규칙**
 
-   * 해결 방향:
+* **정상적인 파동**: `aspect_ratio`가 **일정 범위(예: 0.5 ~ 2.0)** 내에 위치
+* 지나치게 납작(0.2 이하) 또는 바늘형(5 이상)은
 
-     * `SWING_SCALES`(macro/base/micro 등) 기반 다중 스윙 세트 도입.
-     * 상황에 따라 가장 일관된 스케일을 선택하거나, 복수 스케일 정보를 함께 사용.
-   * 추가 옵션:
+  * **의미 있는 파동이라기보다 노이즈/이상 구조**로 간주
+  * 스윙 병합 대상 또는 패턴 스코어 감점
 
-     * ATR 기반 동적 threshold(Volatility adaptive swings) 도입.
+이는 NEoWave의
 
-3. **점수의 불투명성**
+* “가격뿐 아니라 시간도 균형을 이뤄야 한다(Time–Price Equality)”
+* “큰 에너지를 소모한 파동에는 그에 상응하는 시간·가격 조정이 필요하다(Thermodynamic Balance)”
+  를 기계적으로 반영하는 모듈입니다. 
 
-   * 해결 방향:
+### 5.2 패턴별 Time–Price / Energy 체크
 
-     * `RuleCheck` → `rule_evidence` 구조화.
-     * UI의 Rule X-Ray 패널에 규칙별 pass/fail, value vs expected, penalty를 노출.
-   * 효과:
+1. **Impulse**
 
-     * 사용자는 “왜 이게 85점인지”, “어떤 규칙이 아슬아슬했는지”를 확인하고
-       자신의 트레이딩 철학에 맞춰 해석/필터링 가능.
+   * 5파 전체의 “에너지(가격×시간×평균 거래량)”와 이후 조정의 에너지를 비교
+   * 조정 에너지가 이전 추세 에너지의 **일정 비율(예: ≥ 0.33)**에 못 미치면
+
+     * “조정 미완료 가능성” 플래그 또는 시나리오 감점
+
+2. **Zigzag / Flat**
+
+   * A–B–C의 **시간 관계**:
+
+     * `T_B ≈ T_A`면 `T_C ≈ T_A + T_B` 기대,
+     * `T_B >> T_A`면 `T_C ≈ (T_A + T_B)/2` 기대 등. 
+   * 이 관계에서 크게 벗어나면:
+
+     * 해당 패턴 가설의 점수를 낮추고
+     * Combo(복합 조정) 가능성에 가중치를 부여
+
+3. **Triangle, Diametric, Symmetrical**
+
+   * Triangle: A→E로 갈수록 **시간·가격·거래량이 수축**, touch-point 2개 제한. 
+   * Diametric(7파): 7 leg의 시간 길이가 **서로 10–25% 이내**, 중간 D를 기준으로 대칭적 확장/수축. 
+   * Symmetrical(9파): 9 leg의 시간·가격이 **대부분 10% 이내로 균질**해야 함. 
+   * 엔진은 이 균질성 지표를 통해
+
+     * “이상하게 균일한 7·9파 구조”를 단순 combo가 아닌 **Diametric/Symmetrical** 후보로 인식
 
 ---
 
-여기까지가 sir께서 말씀하신 내용과 현재 코드/문서를 기준으로 재구성한 **풀 스펙 1차본**입니다.
-이 상태로 코드 에이전트에게 넘기면, 우선 **WaveBox + WaveTree + Rule X-Ray + 다중 스윙 스케일** 네 축을 중심으로 구체적인 구현 작업을 진행할 수 있을 것입니다.
+## 6. 코드 레벨 구체 수정 지시
+
+### 6.1 `src/neowave_core/swings.py`
+
+1. `detect_swings` 개선
+
+   * 인자 추가:
+
+     * `min_price_retrace_ratio: float` (기본 0.23~0.33)
+     * `min_time_ratio: float` (기본 0.33)
+   * 로직:
+
+     * 역추세 움직임이 위 임계값을 만족할 때만 스윙 종료·신규 스윙 생성.
+   * 후처리:
+
+     * 인접 스윙들에 대해 Rule of Similarity 적용
+
+       * 가격·시간 비 둘 다 0.33 미만인 스윙은 이웃과 병합.
+
+2. `identify_major_pivots(swings, max_pivots=5)` 신규 함수
+
+   * 상술한 Pivot Scoring 로직 구현
+   * 반환: Anchor 후보 스윙 인덱스 리스트 (중요도 순 정렬)
+
+---
+
+### 6.2 `src/neowave_core/scenarios.py`
+
+1. **시나리오 생성 인터페이스 변경**
+
+   ```python
+   def generate_scenarios(
+       swings,
+       max_pivots: int = 5,
+       max_scenarios: int = 3,
+       anchor_indices: list[int] | None = None
+   ) -> list[WaveScenario]:
+   ```
+
+   * `anchor_indices`가 주어지면 (예: custom-range)
+
+     * 이를 우선 Anchor로 사용,
+     * 부족하면 `identify_major_pivots` 결과로 보충
+
+2. **Anchor별 파싱 & 스코어링**
+
+   ```python
+   def _generate_from_anchor(swings, anchor_idx):
+       sub_swings = swings[anchor_idx:]
+       tree = parse_wave_tree(sub_swings)
+       score, violations = score_scenario_with_neowave_rules(tree)
+       return WaveScenario(anchor_idx=anchor_idx, tree=tree, score=score, violations=violations)
+   ```
+
+3. **NEoWave Rule Engine 연동**
+
+   * `rules.py` 또는 `rule_engine.py` 모듈 신설:
+
+     * 첨부 문서 Output 3(JSON) 기반으로
+
+       * 패턴별 price/time/volume/invalidation 규칙을 상수 테이블화. 
+   * `score_scenario_with_neowave_rules`는 이 룰 테이블을 참조하여
+
+     * Hard rule 위반 여부
+     * Soft rule 위반 개수
+     * 복잡도(사용된 패턴 수·조합 깊이)를 종합한 스코어 계산
+
+4. **Multi-scale 검증 훅**
+
+   * `generate_scenarios_multi_scale` 또는 유사 함수에서
+
+     * Base 파동이 완성된 후 Micro 스윙을 받아
+     * 각 WaveNode에 `sub_scale_analysis` 채우는 **후처리 패스** 추가
+
+---
+
+### 6.3 `src/neowave_core/models.py`
+
+* `WaveNode`에 다음 필드 추가 (앞서 제시한 형태):
+
+```python
+sub_scale_analysis: dict | None = None
+box_ratio: float | None = None         # 정사각형성 지표
+energy_metric: float | None = None     # price * time * volume 기반 에너지
+```
+
+* `WaveScenario` (있다면) 구조에:
+
+  * `score: float`
+  * `violations: list[str]`
+  * `invalidation_levels: dict[str, float]` (예: {"price_above": 42000.0})
+
+---
+
+### 6.4 `src/neowave_web/api.py`
+
+1. **신규 엔드포인트 – `/api/analyze/custom-range`**
+
+   * Input / Output은 §4.2에 정의한 JSON 스펙 준수
+   * 내부에서:
+
+     * `fetch_raw_candles(symbol, interval, start_ts, end_ts)`
+     * `detect_swings` → `generate_scenarios` 호출
+     * 상위 N개 시나리오를 요약하여 반환
+
+       * 기본적으로:
+
+         * Anchor 위치(시간·가격)
+         * Top-level pattern (Impulse, Zigzag, Flat, Triangle, Combo, etc.)
+         * score, 주요 invalidation 레벨(가격·시간)
+
+2. **기존 `/api/scenarios` (혹은 유사 엔드포인트) 수정**
+
+   * 파라미터로 `max_pivots`, `max_scenarios`, `scale_mode` 등을 받을 수 있도록 확장
+   * 응답에 `alternative_scenarios` 필드를 추가해
+
+     * 1차·2차·3차 시나리오를 동시에 내려줄 수 있도록 설계
+
+---
+
+## 7. Devil’s Advocate – 예상 리스크와 설계 상 Trade-off
+
+각하, 이 구조는 이론적으로는 타당하지만, 실제 구현·운영 관점에서 다음과 같은 리스크가 존재합니다. 이에 대한 대안까지 함께 제시드립니다.
+
+1. **Anchor 폭증 & 계산량 증가**
+
+   * 문제:
+
+     * Anchor 후보를 많이 잡을수록 시나리오 수가 기하급수적으로 증가.
+   * 대응:
+
+     * `max_pivots`, `max_scenarios`를 **하드 리밋**으로 두고,
+     * Score 상위 Anchor만 채택 (예: 상위 3개 Pivot만 사용).
+     * 실시간 트레이딩 모듈에는 “최근 N 캔들만 분석” 옵션을 두어 시간 제한.
+
+2. **NEoWave 규칙의 과도한 엄격성 → 시나리오 전멸 위험**
+
+   * NEoWave 규칙은 정량화되어 있어 **“0.618”을 강하게 요구**하지만,
+   * 실제 시장에서는 약간의 오버슈트/언더슈트가 빈번.
+   * 대응:
+
+     * Hard rule은 꼭 필요한 최소한(예: 2파 ≥ 100% 1파)만 적용,
+     * 대부분의 수치는 **±2~5% 허용 오차**를 둔 Soft rule로 두고 점수화.
+     * Crypto와 같이 변동성 큰 자산에는
+
+       * B파 0.618 대신 0.65까지 허용 등, 자산별 프로파일링.
+
+3. **Multi-scale 검증의 과도한 제약**
+
+   * Micro 파동이 항상 교과서적 5파/3파 구조를 보이는 것은 아니므로,
+   * cross-scale 검증을 너무 엄격하게 두면 **유효한 큰 구조도 계속 invalid**될 수 있습니다.
+   * 대응:
+
+     * Micro 레벨 불일치는 **감점 요소**로만 사용하고,
+     * Base 구조가 NEoWave 핵심 룰(확장·비례·복잡도 제한)을 잘 만족하면
+       → Micro 불일치가 일부 있어도 시나리오를 허용.
+     * Base–Micro 간 co-consistency score를 따로 두어, UI에서 “신뢰도 메타 정보”로 보여주는 방향.
+
+4. **정사각형(Time–Price) 기준의 오판 위험**
+
+   * 어떤 추세는 본질적으로 매우 빠르거나(짧은 시간, 큰 가격 변화),
+     반대로 매우 지루할 수 있습니다.
+   * 단순 Box Ratio 기준만으로 노이즈/유효 파동을 구분하면,
+   * **트렌드 초입 또는 막판 blow-off를 노이즈로 오인**할 위험 존재.
+   * 대응:
+
+     * Box Ratio는
+
+       * “스윙 병합”의 기준보다는
+       * **에너지·비례성 스코어 보조 지표**로 활용.
+     * 특히, 거래량·변동성 정보와 결합해
+
+       * “짧지만 거래량·변동성이 폭발한 파동”은 노이즈가 아니라
+         중요한 확장 파동 후보로 인정.
+
+---
+
+## 8. 정리
+
+위 사양서 v0.3+는
+
+1. **시작점 선택 로직**을
+
+   * “0번 캔들 맹목적 시작”에서
+   * **NEoWave식 Pivot Scoring + Multi-Anchor 탐색**으로 전환하고,
+
+2. **스케일 간 일관성**을
+
+   * Macro/Base/Micro 독립 분석에서
+   * **하위 파동 구조로 상위 시나리오를 검증·감점·무효화**하는 구조로 확장하며,
+
+3. **정량 규칙과 사용자 인터랙션**을
+
+   * 첨부 NEoWave 정량 규칙(1/3 비례, 피보나치 retracement, Triangle/Complexity cap, Time–Price Equality 등)을
+   * **룰 엔진 + 시나리오 스코어링 + custom-range 인터페이스**로 실제 코드 레벨에 녹여 넣는 방향입니다. 
+
+각하께서 이 문서를 코드 에이전트에 그대로 전달하시면,
+현재 `neowave_core / neowave_web`이 “패턴 모양만 비슷한 장난감” 수준에서 벗어나,
+**실제 NEoWave 논리에 가까운 정량 분석 엔진**으로 진화할 수 있을 것입니다.

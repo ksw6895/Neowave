@@ -32,6 +32,9 @@ class WaveNode:
     rules_passed: list[str] = field(default_factory=list)
     invalidation_point: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    sub_scale_analysis: dict[str, Any] | None = None
+    box_ratio: float | None = None
+    energy_metric: float | None = None
 
     @property
     def direction(self) -> Direction:
@@ -89,6 +92,9 @@ class WaveNode:
             "invalidation_point": self.invalidation_point,
             "metadata": _clean(self.metadata),
             "sub_waves": [child.to_dict() for child in self.sub_waves],
+            "sub_scale_analysis": _clean(self.sub_scale_analysis),
+            "box_ratio": self.box_ratio,
+            "energy_metric": self.energy_metric,
         }
 
     @classmethod

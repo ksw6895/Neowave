@@ -198,6 +198,48 @@
         box-shadow: 0 0 12px rgba(0, 242, 255, 0.2);
         border-radius: 8px;
       }
+      .chart-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-top: 8px;
+        pointer-events: all;
+      }
+      .pill-btn {
+        padding: 6px 10px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 999px;
+        color: var(--text-main);
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      .pill-btn.active {
+        color: #000;
+        background: var(--accent-primary);
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 16px rgba(0, 242, 255, 0.2);
+      }
+      .pill-btn.ghost {
+        color: var(--text-muted);
+        border-style: dashed;
+      }
+      .range-hint {
+        font-size: 11px;
+        color: var(--text-muted);
+      }
+      .range-selection {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        background: rgba(0, 242, 255, 0.08);
+        border: 1px dashed rgba(0, 242, 255, 0.4);
+        pointer-events: none;
+        display: none;
+        z-index: 6;
+      }
       .wave-box-label {
         position: absolute;
         top: 4px;
@@ -429,8 +471,14 @@
       <main class="panel chart-container">
         <div class="chart-overlay">
           <div class="chart-title" id="chart-symbol">BTC/USD</div>
+          <div class="chart-actions">
+            <button class="pill-btn" id="btn-range-toggle">영역 분석</button>
+            <button class="pill-btn ghost" id="btn-range-reset">해제</button>
+            <div class="range-hint" id="range-hint">드래그로 구간 지정</div>
+          </div>
         </div>
         <div id="tv-chart"></div>
+        <div id="range-selection" class="range-selection"></div>
         <div id="wave-overlay-layer" class="wave-overlay-layer"></div>
       </main>
 
