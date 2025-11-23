@@ -37,6 +37,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_SIMILARITY_THRESHOLD,
         help="Similarity threshold for merging swings (default 0.33)",
     )
+    parser.add_argument(
+        "--api-key",
+        dest="api_key",
+        default=None,
+        help="FMP API key (overrides FMP_API_KEY env var if provided)",
+    )
     parser.add_argument("--max-scenarios", type=int, default=5, help="Maximum scenarios to display")
     parser.add_argument("--rules-path", default="rules/neowave_rules.json", help="Path to NEoWave rules JSON")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
@@ -57,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        df = fetch_ohlcv(args.symbol, interval=args.interval, limit=args.lookback)
+        df = fetch_ohlcv(args.symbol, interval=args.interval, limit=args.lookback, api_key=args.api_key)
     except DataLoaderError as exc:
         logger.error("Failed to fetch OHLCV: %s", exc)
         return 1

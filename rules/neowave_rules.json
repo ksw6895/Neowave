@@ -89,7 +89,7 @@
     },
     "Flat": {
       "price_rules": [
-        "waveA_internal = '3-wave (zigzag or complex)',
+        "waveA_internal = '3-wave (zigzag or complex)'",
         "waveB_ratio = waveB_length/waveA_length; waveB_ratio >= 0.618",
         "waveC_internal = '5-wave impulse/diag'",
         "waveC_length >= 0.382 * waveA_length",

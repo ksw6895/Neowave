@@ -1,0 +1,25 @@
+# Environments
+.env
+.env.*
+!.env.example
+!.env copy.example
+.venv/
+venv/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Tools & tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors/OS
+.DS_Store
+.idea/
+.vscode/
