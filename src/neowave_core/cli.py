@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from typing import Any
 
 from dotenv import load_dotenv
 
@@ -11,58 +10,47 @@ from neowave_core.config import (
     AnalysisConfig,
     DEFAULT_INTERVAL,
     DEFAULT_LOOKBACK,
-    DEFAULT_PRICE_THRESHOLD_PCT,
+    DEFAULT_MIN_PRICE_RETRACE_RATIO,
+    DEFAULT_MIN_TIME_RATIO,
     DEFAULT_SIMILARITY_THRESHOLD,
     DEFAULT_SYMBOL,
+    DEFAULT_TARGET_MONOWAVES,
 )
 from neowave_core.data_loader import DataLoaderError, fetch_ohlcv
-from neowave_core.parser import ParseSettings
-from neowave_core.rules_loader import load_rules
+from neowave_core.rules_db import RULE_DB
 from neowave_core.scenarios import generate_scenarios
-from neowave_core.swings import detect_swings
+from neowave_core.swings import detect_monowaves_from_df
 
 logger = logging.getLogger(__name__)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     env_defaults = AnalysisConfig.from_env()
-    parser = argparse.ArgumentParser(description="NEoWave Elliott Wave scenario engine (Phase 1)")
+    parser = argparse.ArgumentParser(description="Fractal NEoWave scenario engine")
     parser.add_argument("--symbol", default=env_defaults.symbol or DEFAULT_SYMBOL, help="Symbol to analyze (default: BTCUSD)")
     parser.add_argument("--interval", default=env_defaults.interval or DEFAULT_INTERVAL, help="Candle interval (default: 1hour)")
     parser.add_argument("--lookback", type=int, default=env_defaults.lookback or DEFAULT_LOOKBACK, help="Number of candles to request")
     parser.add_argument(
-        "--price-threshold",
+        "--retrace-price",
         type=float,
-        default=env_defaults.price_threshold_pct or DEFAULT_PRICE_THRESHOLD_PCT,
-        help="Reversal threshold for swing detection (fractional, default 0.01 => 1%%)",
+        default=env_defaults.min_price_retrace_ratio or DEFAULT_MIN_PRICE_RETRACE_RATIO,
+        help="Minimum opposing retrace (fraction) to start a new monowave (default 0.236)",
+    )
+    parser.add_argument(
+        "--retrace-time",
+        type=float,
+        default=env_defaults.min_time_ratio or DEFAULT_MIN_TIME_RATIO,
+        help="Minimum opposing time ratio to start a new monowave (default 0.2)",
     )
     parser.add_argument(
         "--similarity-threshold",
         type=float,
         default=env_defaults.similarity_threshold or DEFAULT_SIMILARITY_THRESHOLD,
-        help="Similarity threshold for merging swings (default 0.33)",
+        help="Rule of Similarity threshold for merging monowaves (default 0.33)",
     )
-    parser.add_argument(
-        "--min-price-retrace-ratio",
-        type=float,
-        default=env_defaults.min_price_retrace_ratio,
-        help="Minimum price retrace ratio to confirm a swing (default 0.23)",
-    )
-    parser.add_argument(
-        "--min-time-ratio",
-        type=float,
-        default=env_defaults.min_time_ratio,
-        help="Minimum time retrace ratio to confirm a swing (default 0.33)",
-    )
-    parser.add_argument(
-        "--api-key",
-        dest="api_key",
-        default=None,
-        help="FMP API key (overrides FMP_API_KEY env var if provided)",
-    )
+    parser.add_argument("--target-waves", type=int, default=env_defaults.target_monowaves or DEFAULT_TARGET_MONOWAVES, help="Target visible wave count for view level selection")
     parser.add_argument("--max-scenarios", type=int, default=5, help="Maximum scenarios to display")
-    parser.add_argument("--max-pivots", type=int, default=5, help="Maximum anchor pivots to explore")
-    parser.add_argument("--rules-path", default="rules/neowave_rules.json", help="Path to NEoWave rules JSON")
+    parser.add_argument("--api-key", dest="api_key", default=None, help="FMP API key (overrides env if provided)")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args(argv)
 
@@ -76,48 +64,39 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        rules = load_rules(args.rules_path)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to load rules: %s", exc)
-        return 1
-
-    try:
         df = fetch_ohlcv(args.symbol, interval=args.interval, limit=args.lookback, api_key=args.api_key)
     except DataLoaderError as exc:
         logger.error("Failed to fetch OHLCV: %s", exc)
         return 1
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Unexpected error fetching OHLCV: %s", exc)
+        return 1
 
-    swings = detect_swings(
+    monowaves = detect_monowaves_from_df(
         df,
-        price_threshold_pct=args.price_threshold,
+        retrace_threshold_price=args.retrace_price,
+        retrace_threshold_time_ratio=args.retrace_time,
         similarity_threshold=args.similarity_threshold,
-        min_price_retrace_ratio=args.min_price_retrace_ratio,
-        min_time_ratio=args.min_time_ratio,
     )
-    logger.info("Using %s swings for scenario generation", len(swings))
+    logger.info("Detected %s monowaves after similarity merge", len(monowaves))
 
-    current_price = float(df["close"].iloc[-1]) if not df.empty else None
     scenarios = generate_scenarios(
-        swings,
-        rules,
-        max_pivots=args.max_pivots,
-        max_scenarios=args.max_scenarios,
-        current_price=current_price,
-        settings=ParseSettings(similarity_threshold=args.similarity_threshold),
+        monowaves,
+        rule_db=RULE_DB,
+        target_wave_count=args.target_waves,
     )
     if not scenarios:
         print("No scenarios detected with current parameters.")
         return 0
 
-    for idx, scenario in enumerate(scenarios, start=1):
-        print(f"Scenario {idx} (score: {scenario['score']:.2f})")
-        print(f"  Pattern: {scenario['pattern_type']}")
-        start_idx, end_idx = scenario["swing_indices"]
-        print(f"  Swings: {start_idx} to {end_idx}")
-        print(f"  Summary: {scenario['textual_summary']}")
-        invalidation = scenario.get("invalidation_levels", {})
-        if invalidation:
-            print(f"  Invalidation: {invalidation}")
+    for idx, scenario in enumerate(scenarios[: args.max_scenarios], start=1):
+        print(f"[Scenario {idx}] Score={scenario['global_score']:.3f} Status={scenario['status']}")
+        roots = scenario.get("roots", [])
+        root_desc = ", ".join(f"{r['pattern_type'] or 'Monowave'}[{r['start_idx']}-{r['end_idx']}]" for r in roots)
+        print(f"  Roots: {root_desc}")
+        print(f"  View level {scenario.get('view_level', 0)} nodes: {len(scenario.get('view_nodes', []))}")
+        if scenario.get("invalidation_reasons"):
+            print(f"  Invalidation: {scenario['invalidation_reasons']}")
         print()
 
     return 0

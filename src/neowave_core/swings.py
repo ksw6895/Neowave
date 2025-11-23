@@ -4,19 +4,12 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Iterable, List, Sequence
+from typing import Any, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
 
-from neowave_core.config import (
-    DEFAULT_MIN_PRICE_RETRACE_RATIO,
-    DEFAULT_MIN_TIME_RATIO,
-    DEFAULT_PRICE_THRESHOLD_PCT,
-    DEFAULT_SIMILARITY_THRESHOLD,
-    DEFAULT_SWING_COUNT_RANGE,
-    SWING_SCALES,
-)
+from neowave_core.models import Monowave
 
 logger = logging.getLogger(__name__)
 
@@ -31,329 +24,217 @@ class Direction(Enum):
 
 
 @dataclass(slots=True)
-class Swing:
-    start_time: datetime
-    end_time: datetime
-    start_price: float
-    end_price: float
-    direction: Direction
+class Bar:
+    timestamp: datetime
+    open: float
     high: float
     low: float
-    duration: float  # seconds
+    close: float
     volume: float = 0.0
 
-    @property
-    def length(self) -> float:
-        return abs(self.end_price - self.start_price)
 
-    @property
-    def delta_price(self) -> float:
-        return self.end_price - self.start_price
-
-    @property
-    def price_range(self) -> float:
-        return self.high - self.low
-
-    @property
-    def time_seconds(self) -> float:
-        return self.duration
-
-    @property
-    def energy(self) -> float:
-        """Rough thermodynamic balance proxy using price, time, and volume."""
-        return abs(self.delta_price) * max(self.duration, 1.0) * max(self.volume, 1.0)
-
-
-@dataclass(slots=True)
-class SwingSet:
-    scale_id: str
-    swings: Sequence["Swing"]
-
-
-def _build_swing(df: pd.DataFrame, start_idx: int, end_idx: int, direction: Direction) -> Swing:
-    segment = df.iloc[start_idx : end_idx + 1]
-    start_time = pd.to_datetime(segment.iloc[0]["timestamp"], utc=True).to_pydatetime()
-    end_time = pd.to_datetime(segment.iloc[-1]["timestamp"], utc=True).to_pydatetime()
-    start_price = float(segment.iloc[0]["close"])
-    end_price = float(segment.iloc[-1]["close"])
-    high = float(segment["high"].max())
-    low = float(segment["low"].min())
-    duration = (end_time - start_time).total_seconds()
-    volume = float(segment["volume"].sum()) if "volume" in segment else 0.0
-    return Swing(
-        start_time=start_time,
-        end_time=end_time,
-        start_price=start_price,
-        end_price=end_price,
-        direction=direction,
-        high=high,
-        low=low,
-        duration=duration,
-        volume=volume,
-    )
-
-
-def normalize_swings(swings: Sequence[Swing], similarity_threshold: float = 0.33) -> list[Swing]:
-    """Merge very small swings using the Rule of Similarity (~33%)."""
-    merged: List[Swing] = list(swings)
-    changed = True
-    while changed and len(merged) >= 3:
-        changed = False
-        for idx in range(1, len(merged) - 1):
-            prev_swing = merged[idx - 1]
-            tiny = merged[idx]
-            next_swing = merged[idx + 1]
-            if prev_swing.direction != next_swing.direction:
-                continue
-            tiny_len = tiny.length
-            neighbor_max = max(prev_swing.length, next_swing.length)
-            neighbor_time_max = max(prev_swing.duration, next_swing.duration, 1e-9)
-            price_ratio = tiny_len / neighbor_max if neighbor_max else 0.0
-            time_ratio = tiny.duration / neighbor_time_max if neighbor_time_max else 0.0
-            # Only merge when both price/time similarity fall below threshold (noise-like swing).
-            if price_ratio >= similarity_threshold or time_ratio >= similarity_threshold:
-                continue
-            start_time = prev_swing.start_time
-            end_time = next_swing.end_time
-            duration = (end_time - start_time).total_seconds()
-            new_swing = Swing(
-                start_time=start_time,
-                end_time=end_time,
-                start_price=prev_swing.start_price,
-                end_price=next_swing.end_price,
-                direction=prev_swing.direction,
-                high=max(prev_swing.high, tiny.high, next_swing.high),
-                low=min(prev_swing.low, tiny.low, next_swing.low),
-                duration=duration,
-                volume=prev_swing.volume + tiny.volume + next_swing.volume,
+def _normalize_bars(data: Iterable[dict[str, Any]] | pd.DataFrame) -> list[Bar]:
+    if isinstance(data, pd.DataFrame):
+        if "timestamp" not in data.columns:
+            raise ValueError("DataFrame must include a 'timestamp' column")
+        data = data.sort_values("timestamp").reset_index(drop=True)
+        records = data.to_dict("records")
+    else:
+        records = list(data)
+    bars: list[Bar] = []
+    for item in records:
+        ts = item.get("timestamp")
+        if not isinstance(ts, datetime):
+            ts = pd.to_datetime(ts, utc=True).to_pydatetime()
+        bars.append(
+            Bar(
+                timestamp=ts,
+                open=float(item.get("open", item.get("close", 0.0))),
+                high=float(item.get("high", item.get("close", 0.0))),
+                low=float(item.get("low", item.get("close", 0.0))),
+                close=float(item.get("close", item.get("open", 0.0))),
+                volume=float(item.get("volume", 0.0)),
             )
-            merged = merged[: idx - 1] + [new_swing] + merged[idx + 2 :]
-            changed = True
-            break
-    return merged
+        )
+    return bars
 
 
-def _compute_box_ratio(swing: Swing, typical_scale: float) -> float:
-    time_range = max(swing.duration, 1.0)
-    price_range = max(swing.price_range, 1e-9)
-    scale = typical_scale if typical_scale > 0 else 1.0
-    return price_range / (scale * time_range)
+def detect_monowaves(
+    bars: Iterable[dict[str, Any]] | pd.DataFrame,
+    retrace_threshold_price: float = 0.236,
+    retrace_threshold_time_ratio: float = 0.2,
+) -> list[Monowave]:
+    """
+    Detect monowaves using NEoWave-style zigzag pivots.
 
+    A new monowave is confirmed when an opposing move retraces at least
+    retrace_threshold_price (23~38%) or lasts longer than retrace_threshold_time_ratio
+    of the prior swing duration.
+    """
+    ordered = _normalize_bars(bars)
+    if not ordered:
+        return []
 
-def _shape_penalty(ratio: float) -> float:
-    """Penalize extreme aspect ratios; keep 0 around the 0.5~2 comfort band."""
-    if ratio <= 0:
-        return 0.0
-    if 0.5 <= ratio <= 2.0:
-        return 0.0
-    if ratio < 0.5:
-        return min(1.0, (0.5 - ratio) * 2.0)
-    return min(1.0, (ratio - 2.0) / 2.0)
-
-
-def _typical_scale(swings: Sequence[Swing]) -> float:
-    ratios = []
-    for swing in swings:
-        if swing.duration <= 0:
-            continue
-        ratios.append(swing.price_range / swing.duration)
-    if not ratios:
-        return 1.0
-    return float(np.median(ratios))
-
-
-def _detect_swings_once(
-    ordered: pd.DataFrame,
-    price_threshold_pct: float,
-    min_price_retrace_ratio: float,
-    min_time_ratio: float,
-) -> list[Swing]:
-    closes = ordered["close"].to_numpy(dtype=float)
-    timestamps = ordered["timestamp"].to_numpy()
-    direction: Direction | None = None
-    last_pivot_idx = 0
+    swings: list[Monowave] = []
+    current_dir: str | None = None
+    pivot_idx = 0
     extreme_idx = 0
-    swings: list[Swing] = []
 
     for idx in range(1, len(ordered)):
-        price = closes[idx]
-        if direction is None:
-            move = (price - closes[last_pivot_idx]) / closes[last_pivot_idx] if closes[last_pivot_idx] else 0.0
-            if abs(move) >= price_threshold_pct:
-                direction = Direction.UP if price >= closes[last_pivot_idx] else Direction.DOWN
-                extreme_idx = idx
+        price = ordered[idx].close
+        pivot_price = ordered[pivot_idx].close
+        if current_dir is None:
+            if price == pivot_price:
+                continue
+            current_dir = "up" if price > pivot_price else "down"
+            extreme_idx = idx
             continue
 
-        # Track the farthest price in the current trend direction.
-        if direction == Direction.UP:
-            if price >= closes[extreme_idx]:
+        # Track farthest price in current direction.
+        if current_dir == "up":
+            if price >= ordered[extreme_idx].close:
                 extreme_idx = idx
         else:
-            if price <= closes[extreme_idx]:
+            if price <= ordered[extreme_idx].close:
                 extreme_idx = idx
 
-        swing_length = abs(closes[extreme_idx] - closes[last_pivot_idx])
-        if swing_length == 0:
+        move_length = abs(ordered[extreme_idx].close - ordered[pivot_idx].close)
+        if move_length == 0:
             continue
 
-        start_time = pd.to_datetime(timestamps[last_pivot_idx], utc=True)
-        extreme_time = pd.to_datetime(timestamps[extreme_idx], utc=True)
-        current_time = pd.to_datetime(timestamps[idx], utc=True)
-        swing_duration = (extreme_time - start_time).total_seconds()
-        elapsed = (current_time - extreme_time).total_seconds()
+        retrace_price = abs(price - ordered[extreme_idx].close)
+        elapsed_bars = idx - extreme_idx
+        prev_duration = max(extreme_idx - pivot_idx, 1)
 
-        retrace_ratio = abs(price - closes[extreme_idx]) / swing_length
-        time_ratio = (elapsed / swing_duration) if swing_duration > 0 else 0.0
-
-        if retrace_ratio >= min_price_retrace_ratio or time_ratio >= min_time_ratio:
-            swings.append(_build_swing(ordered, last_pivot_idx, extreme_idx, direction))
-            last_pivot_idx = extreme_idx
-            direction = Direction.DOWN if direction == Direction.UP else Direction.UP
+        if retrace_price >= retrace_threshold_price * move_length or elapsed_bars >= retrace_threshold_time_ratio * prev_duration:
+            wave_id = len(swings)
+            swings.append(Monowave.from_bars(ordered, pivot_idx, extreme_idx, wave_id=wave_id))
+            pivot_idx = extreme_idx
+            current_dir = "down" if current_dir == "up" else "up"
             extreme_idx = idx
 
-    if direction is None:
-        trend_dir = Direction.from_prices(closes[0], closes[-1])
-        swings.append(_build_swing(ordered, 0, len(ordered) - 1, trend_dir))
-    else:
-        swings.append(_build_swing(ordered, last_pivot_idx, len(ordered) - 1, direction))
+    # Final leg to the end.
+    if not swings or swings[-1].end_idx != len(ordered) - 1:
+        wave_id = len(swings)
+        swings.append(Monowave.from_bars(ordered, pivot_idx, len(ordered) - 1, wave_id=wave_id))
 
     return swings
 
 
-def identify_major_pivots(
-    swings: Sequence[Swing],
-    max_pivots: int = 5,
-    weights: dict[str, float] | None = None,
-) -> list[int]:
-    """Score swings by price/time/energy balance to pick anchor candidates."""
-    if not swings or max_pivots <= 0:
+def merge_monowave_pair(w1: Monowave, w2: Monowave, wave_id: int) -> Monowave:
+    start_idx = min(w1.start_idx, w2.start_idx)
+    end_idx = max(w1.end_idx, w2.end_idx)
+    start_time = min(w1.start_time, w2.start_time)
+    end_time = max(w1.end_time, w2.end_time)
+    start_price = w1.start_price
+    end_price = w2.end_price
+    direction: str = "up" if end_price >= start_price else "down"
+    high_price = max(w1.high_price, w2.high_price)
+    low_price = min(w1.low_price, w2.low_price)
+    duration = w1.duration + w2.duration
+    volume_sum = w1.volume_sum + w2.volume_sum
+    return Monowave(
+        id=wave_id,
+        start_idx=start_idx,
+        end_idx=end_idx,
+        start_time=start_time,
+        end_time=end_time,
+        start_price=start_price,
+        end_price=end_price,
+        high_price=high_price,
+        low_price=low_price,
+        direction=direction,  # type: ignore[arg-type]
+        price_change=end_price - start_price,
+        abs_price_change=abs(end_price - start_price),
+        duration=duration,
+        volume_sum=volume_sum,
+    )
+
+
+def merge_by_similarity(monowaves: Sequence[Monowave], min_ratio: float = 0.33) -> list[Monowave]:
+    """Merge adjacent monowaves that violate the Rule of Similarity (both price/time < threshold)."""
+    merged = list(monowaves)
+    changed = True
+    while changed and len(merged) >= 2:
+        changed = False
+        new_list: list[Monowave] = []
+        i = 0
+        while i < len(merged):
+            if i == len(merged) - 1:
+                new_list.append(merged[i])
+                break
+            w1 = merged[i]
+            w2 = merged[i + 1]
+            price_ratio = min(w1.abs_price_change, w2.abs_price_change) / max(w1.abs_price_change, w2.abs_price_change)
+            time_ratio = min(w1.duration, w2.duration) / max(w1.duration, w2.duration)
+            if price_ratio < min_ratio and time_ratio < min_ratio:
+                merged_wave = merge_monowave_pair(w1, w2, wave_id=len(new_list))
+                new_list.append(merged_wave)
+                i += 2
+                changed = True
+            else:
+                new_list.append(w1)
+                i += 1
+        merged = new_list
+    return merged
+
+
+def detect_monowaves_from_df(
+    df: pd.DataFrame,
+    retrace_threshold_price: float = 0.236,
+    retrace_threshold_time_ratio: float = 0.2,
+    similarity_threshold: float = 0.33,
+) -> list[Monowave]:
+    raw = detect_monowaves(df, retrace_threshold_price=retrace_threshold_price, retrace_threshold_time_ratio=retrace_threshold_time_ratio)
+    merged = merge_by_similarity(raw, min_ratio=similarity_threshold)
+    logger.info("Detected %s monowaves (merged from %s)", len(merged), len(raw))
+    return merged
+
+
+def identify_major_pivots(monowaves: Sequence[Monowave], max_pivots: int = 5) -> list[int]:
+    """Score monowaves by price/time/volume to pick anchor candidates (compat helper)."""
+    if not monowaves or max_pivots <= 0:
         return []
-    weight = {
-        "price": 0.35,
-        "time": 0.2,
-        "volume": 0.1,
-        "energy": 0.3,
-        "shape": 0.2,
-    }
-    if weights:
-        weight.update(weights)
-
-    avg_abs_delta = float(np.mean([abs(sw.delta_price) for sw in swings])) or 1.0
-    avg_duration = float(np.mean([sw.duration for sw in swings])) or 1.0
-    avg_volume = float(np.mean([sw.volume for sw in swings])) or 1.0
-    typical_scale = _typical_scale(swings)
-
+    avg_abs_delta = float(np.mean([mw.abs_price_change for mw in monowaves])) or 1.0
+    avg_duration = float(np.mean([mw.duration for mw in monowaves])) or 1.0
+    avg_volume = float(np.mean([mw.volume_sum for mw in monowaves])) or 1.0
     scored: list[tuple[int, float]] = []
-    for idx, sw in enumerate(swings):
-        price_score = abs(sw.delta_price) / avg_abs_delta
-        time_score = sw.duration / avg_duration
-        volume_score = sw.volume / avg_volume
+    for idx, mw in enumerate(monowaves):
+        price_score = mw.abs_price_change / avg_abs_delta
+        time_score = mw.duration / avg_duration
+        volume_score = mw.volume_sum / avg_volume if avg_volume else 0.0
         energy_score = price_score * max(time_score, 1.0)
-        ratio = _compute_box_ratio(sw, typical_scale)
-        shape_penalty = _shape_penalty(ratio)
-        pivot_score = (
-            weight["price"] * price_score
-            + weight["time"] * time_score
-            + weight["volume"] * volume_score
-            + weight["energy"] * energy_score
-            - weight["shape"] * shape_penalty
-        )
+        pivot_score = 0.4 * price_score + 0.2 * time_score + 0.1 * volume_score + 0.3 * energy_score
         scored.append((idx, pivot_score))
-
     scored.sort(key=lambda item: item[1], reverse=True)
-    return [idx for idx, score in scored[:max_pivots] if score > 0]
+    return [idx for idx, _ in scored[:max_pivots] if idx < len(monowaves)]
 
 
-def detect_swings(
-    df: pd.DataFrame,
-    price_threshold_pct: float = DEFAULT_PRICE_THRESHOLD_PCT,
-    similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
-    min_price_retrace_ratio: float = DEFAULT_MIN_PRICE_RETRACE_RATIO,
-    min_time_ratio: float = DEFAULT_MIN_TIME_RATIO,
-    target_count_range: tuple[int, int] = DEFAULT_SWING_COUNT_RANGE,
-    max_refinements: int = 2,
-) -> list[Swing]:
-    """Detect swings using a simple reversal threshold on closing prices."""
-    if df.empty:
-        return []
-    if "timestamp" not in df.columns:
-        raise ValueError("DataFrame must include a 'timestamp' column")
+def auto_select_timeframe(candidates: dict[str, pd.DataFrame], target_monowaves: int = 40) -> tuple[str, list[Monowave]]:
+    """
+    Pick the timeframe that yields a monowave count closest to target_monowaves.
 
-    ordered = df.sort_values("timestamp").reset_index(drop=True)
-    target_min, target_max = target_count_range
-
-    swings = _detect_swings_once(
-        ordered,
-        price_threshold_pct=price_threshold_pct,
-        min_price_retrace_ratio=min_price_retrace_ratio,
-        min_time_ratio=min_time_ratio,
-    )
-    normalized = normalize_swings(swings, similarity_threshold=similarity_threshold)
-
-    # Auto-tune thresholds to stay within the desired monowave count window.
-    tuned_price_ratio = min_price_retrace_ratio
-    tuned_time_ratio = min_time_ratio
-    tuned_price_threshold = price_threshold_pct
-    attempts = 0
-    while attempts < max_refinements:
-        count = len(normalized)
-        if target_min <= count <= target_max:
-            break
-        attempts += 1
-        if count < target_min:
-            tuned_price_ratio = max(0.15, tuned_price_ratio - 0.05)
-            tuned_time_ratio = max(0.25, tuned_time_ratio - 0.05)
-            tuned_price_threshold = max(0.5 * price_threshold_pct, tuned_price_threshold * 0.8)
-        else:
-            tuned_price_ratio = min(0.5, tuned_price_ratio + 0.05)
-            tuned_time_ratio = min(0.5, tuned_time_ratio + 0.05)
-            tuned_price_threshold = min(price_threshold_pct * 1.5, tuned_price_threshold * 1.2)
-        swings = _detect_swings_once(
-            ordered,
-            price_threshold_pct=tuned_price_threshold,
-            min_price_retrace_ratio=tuned_price_ratio,
-            min_time_ratio=tuned_time_ratio,
-        )
-        normalized = normalize_swings(swings, similarity_threshold=similarity_threshold)
-
-    logger.info(
-        "Detected %s swings (normalized from %s) with price_ratio=%.3f time_ratio=%.3f threshold=%.4f",
-        len(normalized),
-        len(swings),
-        tuned_price_ratio,
-        tuned_time_ratio,
-        tuned_price_threshold,
-    )
-    return normalized
+    candidates: mapping {timeframe: ohlcv_dataframe}
+    """
+    best_tf = None
+    best_distance = float("inf")
+    best_monowaves: list[Monowave] = []
+    for tf, df in candidates.items():
+        monowaves = detect_monowaves_from_df(df)
+        distance = abs(len(monowaves) - target_monowaves)
+        if distance < best_distance:
+            best_distance = distance
+            best_tf = tf
+            best_monowaves = monowaves
+    if best_tf is None:
+        raise ValueError("No timeframe candidates provided")
+    return best_tf, best_monowaves
 
 
-def swings_to_array(swings: Iterable[Swing]) -> np.ndarray:
-    """Convert swing lengths to an array for quick calculations."""
-    return np.array([s.length for s in swings], dtype=float)
+def normalize_monowaves(monowaves: Sequence[Monowave]) -> list[Monowave]:
+    """Alias kept for compatibility."""
+    return merge_by_similarity(monowaves)
 
 
-def detect_swings_multi_scale(
-    df: pd.DataFrame,
-    scales: list[dict] | None = None,
-) -> list[SwingSet]:
-    """Run swing detection across multiple predefined scales (macro/base/micro)."""
-    config_scales = scales or SWING_SCALES
-    results: list[SwingSet] = []
-    for scale in config_scales:
-        scale_id = scale.get("id", "base")
-        price_threshold_pct = float(scale.get("price_threshold_pct", DEFAULT_PRICE_THRESHOLD_PCT))
-        similarity_threshold = float(scale.get("similarity_threshold", DEFAULT_SIMILARITY_THRESHOLD))
-        min_price_retrace_ratio = float(scale.get("min_price_retrace_ratio", DEFAULT_MIN_PRICE_RETRACE_RATIO))
-        min_time_ratio = float(scale.get("min_time_ratio", DEFAULT_MIN_TIME_RATIO))
-        target_min = int(scale.get("target_min_swings", DEFAULT_SWING_COUNT_RANGE[0]))
-        target_max = int(scale.get("target_max_swings", DEFAULT_SWING_COUNT_RANGE[1]))
-        swings = detect_swings(
-            df,
-            price_threshold_pct=price_threshold_pct,
-            similarity_threshold=similarity_threshold,
-            min_price_retrace_ratio=min_price_retrace_ratio,
-            min_time_ratio=min_time_ratio,
-            target_count_range=(target_min, target_max),
-        )
-        results.append(SwingSet(scale_id=scale_id, swings=swings))
-    return results
+# Backward compatibility aliases
+Swing = Monowave

@@ -3,30 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+import logging
+import time
+
 import pandas as pd
+from dotenv import load_dotenv
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from dotenv import load_dotenv
 
-from neowave_core import (
-    AnalysisConfig,
-    ParseSettings,
-    detect_swings,
-    detect_swings_multi_scale,
-    generate_scenarios,
-    generate_scenarios_multi_scale,
-    identify_major_pivots,
-    load_rules,
-)
-from neowave_core.data_loader import DataLoaderError, fetch_ohlcv
-from neowave_web.schemas import (
-    CandleResponse,
-    CustomRangeRequest,
-    CustomRangeResponse,
-    ScenariosResponse,
-    SwingsResponse,
-)
+from neowave_core import AnalysisConfig, RULE_DB, detect_monowaves_from_df, fetch_ohlcv, generate_scenarios
+from neowave_core.data_loader import DataLoaderError
+from neowave_core.scenarios import find_wave_node, serialize_wave_node
+from neowave_web.schemas import CandleResponse, MonowaveResponse, RuleXRayResponse, ScenariosResponse, WaveChildrenResponse
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -35,18 +24,8 @@ def _default_data_provider(symbol: str, interval: str, limit: int, **_: Any) -> 
     return fetch_ohlcv(symbol, interval=interval, limit=limit)
 
 
-def _serialize_swing(swing) -> dict[str, Any]:
-    return {
-        "start_time": swing.start_time,
-        "end_time": swing.end_time,
-        "start_price": swing.start_price,
-        "end_price": swing.end_price,
-        "direction": swing.direction.value,
-        "high": swing.high,
-        "low": swing.low,
-        "duration": swing.duration,
-        "volume": swing.volume,
-    }
+def _serialize_monowave(mw) -> dict[str, Any]:
+    return mw.to_dict()
 
 
 def _serialize_candles(df: pd.DataFrame) -> list[dict[str, Any]]:
@@ -63,31 +42,33 @@ def _serialize_candles(df: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
-def _load_rules_with_fallback() -> dict[str, Any]:
-    try:
-        return load_rules()
-    except FileNotFoundError:
-        project_root = Path(__file__).resolve().parents[3]
-        fallback = project_root / "rules" / "neowave_rules.json"
-        return load_rules(fallback)
-
-
 def create_app(
     analysis_config: AnalysisConfig | None = None,
     data_provider: Callable[..., pd.DataFrame] | None = None,
 ) -> FastAPI:
     """Create a FastAPI application serving NEoWave data and scenarios."""
+    logger = logging.getLogger("neowave_web.api")
     load_dotenv()
     config = analysis_config or AnalysisConfig.from_env()
     provider = data_provider or _default_data_provider
 
-    app = FastAPI(title="NEoWave Web Service", version="0.2.1")
+    app = FastAPI(title="NEoWave Web Service", version="0.3.0")
     index_html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     def _get_df(limit: int, symbol: str | None = None, interval: str | None = None) -> pd.DataFrame:
         try:
-            return provider(symbol or config.symbol, interval=interval or config.interval, limit=limit)
+            t0 = time.perf_counter()
+            result = provider(symbol or config.symbol, interval=interval or config.interval, limit=limit)
+            logger.info(
+                "Fetched OHLCV symbol=%s interval=%s limit=%s rows=%s (%.3fs)",
+                symbol or config.symbol,
+                interval or config.interval,
+                limit,
+                len(result),
+                time.perf_counter() - t0,
+            )
+            return result
         except DataLoaderError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
@@ -109,160 +90,145 @@ def create_app(
         candles = _serialize_candles(df)
         return CandleResponse(candles=candles, count=len(candles))
 
-    def _resolve_swings(
-        df: pd.DataFrame,
-        scale_id: str,
-        price_threshold: float | None,
-        similarity_threshold: float | None,
-        min_price_retrace_ratio: float | None = None,
-        min_time_ratio: float | None = None,
-    ) -> tuple[list, list, float, float, float, float]:
-        if price_threshold is not None or similarity_threshold is not None:
-            price_threshold_effective = price_threshold if price_threshold is not None else config.price_threshold_pct
-            similarity_effective = similarity_threshold if similarity_threshold is not None else config.similarity_threshold
-            min_price_effective = min_price_retrace_ratio if min_price_retrace_ratio is not None else config.min_price_retrace_ratio
-            min_time_effective = min_time_ratio if min_time_ratio is not None else config.min_time_ratio
-            swings = detect_swings(
-                df,
-                price_threshold_pct=price_threshold_effective,
-                similarity_threshold=similarity_effective,
-                min_price_retrace_ratio=min_price_effective,
-                min_time_ratio=min_time_effective,
-                target_count_range=config.swing_count_range,
-            )
-            return swings, [], similarity_effective, price_threshold_effective, min_price_effective, min_time_effective
-
-        swing_sets = detect_swings_multi_scale(df, scales=config.swing_scales)
-        selected = next((s for s in swing_sets if s.scale_id == scale_id), None)
-        if not selected and swing_sets:
-            selected = next((s for s in swing_sets if s.scale_id == "base"), swing_sets[0])
-        similarity_effective = config.similarity_threshold
-        price_threshold_effective = config.price_threshold_pct
-        min_price_effective = config.min_price_retrace_ratio
-        min_time_effective = config.min_time_ratio
-        if selected:
-            for scale_cfg in config.swing_scales:
-                if scale_cfg.get("id") == selected.scale_id:
-                    price_threshold_effective = scale_cfg.get("price_threshold_pct", price_threshold_effective)
-                    similarity_effective = scale_cfg.get("similarity_threshold", similarity_effective)
-                    min_price_effective = scale_cfg.get("min_price_retrace_ratio", min_price_effective)
-                    min_time_effective = scale_cfg.get("min_time_ratio", min_time_effective)
-                    break
-        return (
-            list(selected.swings) if selected else [],
-            swing_sets,
-            similarity_effective,
-            price_threshold_effective,
-            float(min_price_effective),
-            float(min_time_effective),
-        )
-
-    @app.get("/api/swings", response_model=SwingsResponse)
-    def get_swings(
+    @app.get("/api/monowaves", response_model=MonowaveResponse)
+    def get_monowaves(
         limit: int = Query(config.lookback, ge=1, le=2000),
         symbol: str = Query(config.symbol),
         interval: str = Query(config.interval),
-        price_threshold: float | None = Query(None, ge=0.001, le=0.2),
-        similarity_threshold: float | None = Query(None, ge=0.1, le=1.0),
-        min_price_retrace_ratio: float | None = Query(None, ge=0.1, le=1.0),
-        min_time_ratio: float | None = Query(None, ge=0.1, le=1.0),
-        scale_id: str = Query("base"),
-    ) -> SwingsResponse:
+        retrace_price: float = Query(config.min_price_retrace_ratio, ge=0.05, le=1.0),
+        retrace_time: float = Query(config.min_time_ratio, ge=0.05, le=1.0),
+        similarity_threshold: float = Query(config.similarity_threshold, ge=0.1, le=1.0),
+    ) -> MonowaveResponse:
         df = _get_df(limit, symbol=symbol, interval=interval)
-        swings, swing_sets, _, _, _, _ = _resolve_swings(
+        t0 = time.perf_counter()
+        monowaves = detect_monowaves_from_df(
             df,
-            scale_id,
-            price_threshold,
-            similarity_threshold,
-            min_price_retrace_ratio,
-            min_time_ratio,
+            retrace_threshold_price=retrace_price,
+            retrace_threshold_time_ratio=retrace_time,
+            similarity_threshold=similarity_threshold,
         )
-        serialized = [_serialize_swing(s) for s in swings]
-        return SwingsResponse(swings=serialized, count=len(serialized), scale_id=scale_id)
+        logger.info(
+            "Monowaves detected count=%s symbol=%s interval=%s retrace_price=%.3f retrace_time=%.3f similarity=%.3f (%.3fs)",
+            len(monowaves),
+            symbol,
+            interval,
+            retrace_price,
+            retrace_time,
+            similarity_threshold,
+            time.perf_counter() - t0,
+        )
+        serialized = [_serialize_monowave(mw) for mw in monowaves]
+        return MonowaveResponse(monowaves=serialized, count=len(serialized))
 
     @app.get("/api/scenarios", response_model=ScenariosResponse)
     def get_scenarios(
         limit: int = Query(config.lookback, ge=1, le=2000),
         symbol: str = Query(config.symbol),
         interval: str = Query(config.interval),
-        max_scenarios: int = Query(8, ge=1, le=20),
-        max_pivots: int = Query(5, ge=1, le=10),
-        price_threshold: float | None = Query(None, ge=0.001, le=0.2),
-        similarity_threshold: float | None = Query(None, ge=0.1, le=1.0),
-        min_price_retrace_ratio: float | None = Query(None, ge=0.1, le=1.0),
-        min_time_ratio: float | None = Query(None, ge=0.1, le=1.0),
-        scale_id: str = Query("base"),
+        target_wave_count: int = Query(config.target_monowaves, ge=5, le=120),
+        beam_width: int = Query(6, ge=2, le=12),
     ) -> ScenariosResponse:
         df = _get_df(limit, symbol=symbol, interval=interval)
-        swings, swing_sets, similarity_effective, _, _, _ = _resolve_swings(
+        t0 = time.perf_counter()
+        monowaves = detect_monowaves_from_df(
             df,
-            scale_id,
-            price_threshold,
-            similarity_threshold,
-            min_price_retrace_ratio,
-            min_time_ratio,
+            retrace_threshold_price=config.min_price_retrace_ratio,
+            retrace_threshold_time_ratio=config.min_time_ratio,
+            similarity_threshold=config.similarity_threshold,
         )
-        rules = _load_rules_with_fallback()
-        current_price = float(df["close"].iloc[-1]) if not df.empty else None
-        context_summary = {s.scale_id: len(s.swings) for s in swing_sets} if swing_sets else {}
-        scenarios = generate_scenarios(
-            swings,
-            rules,
-            max_pivots=max_pivots,
-            max_scenarios=max_scenarios,
-            current_price=current_price,
-            settings=ParseSettings(similarity_threshold=similarity_effective),
-            scale_id=scale_id,
-            swing_sets=swing_sets,
+        t1 = time.perf_counter()
+        scenarios = generate_scenarios(monowaves, rule_db=RULE_DB, beam_width=beam_width, target_wave_count=target_wave_count)
+        t2 = time.perf_counter()
+        logger.info(
+            "Scenarios built symbol=%s interval=%s monowaves=%s scenarios=%s target=%s beam=%s detect=%.3fs analyze=%.3fs total=%.3fs",
+            symbol,
+            interval,
+            len(monowaves),
+            len(scenarios),
+            target_wave_count,
+            beam_width,
+            t1 - t0,
+            t2 - t1,
+            t2 - t0,
         )
-        for sc in scenarios:
-            sc.setdefault("details", {})
-            sc["details"]["scale_context"] = context_summary
         return ScenariosResponse(scenarios=scenarios, count=len(scenarios))
 
-    @app.post("/api/analyze/custom-range", response_model=CustomRangeResponse)
-    def analyze_custom_range(payload: CustomRangeRequest = Body(...)) -> CustomRangeResponse:
-        start_dt = pd.to_datetime(payload.start_ts, unit="s", utc=True)
-        end_dt = pd.to_datetime(payload.end_ts, unit="s", utc=True)
+    @app.get("/api/waves/current", response_model=WaveChildrenResponse)
+    def get_view_nodes(
+        limit: int = Query(config.lookback, ge=1, le=2000),
+        symbol: str = Query(config.symbol),
+        interval: str = Query(config.interval),
+        target_wave_count: int = Query(config.target_monowaves, ge=5, le=120),
+    ) -> WaveChildrenResponse:
+        df = _get_df(limit, symbol=symbol, interval=interval)
+        monowaves = detect_monowaves_from_df(df, retrace_threshold_price=config.min_price_retrace_ratio, retrace_threshold_time_ratio=config.min_time_ratio, similarity_threshold=config.similarity_threshold)
+        scenarios = generate_scenarios(monowaves, rule_db=RULE_DB, target_wave_count=target_wave_count)
+        if not scenarios:
+            return WaveChildrenResponse(parent_id=-1, children=[])
+        view_nodes = scenarios[0].get("view_nodes", [])
+        return WaveChildrenResponse(parent_id=scenarios[0]["id"], children=view_nodes)
+
+    @app.get("/api/waves/{wave_id}/children", response_model=WaveChildrenResponse)
+    def get_wave_children(
+        wave_id: int,
+        limit: int = Query(config.lookback, ge=1, le=2000),
+        symbol: str = Query(config.symbol),
+        interval: str = Query(config.interval),
+    ) -> WaveChildrenResponse:
+        df = _get_df(limit, symbol=symbol, interval=interval)
+        monowaves = detect_monowaves_from_df(df, retrace_threshold_price=config.min_price_retrace_ratio, retrace_threshold_time_ratio=config.min_time_ratio, similarity_threshold=config.similarity_threshold)
+        node = find_wave_node(monowaves, wave_id, rule_db=RULE_DB)
+        if not node:
+            raise HTTPException(status_code=404, detail="Wave not found")
+        return WaveChildrenResponse(parent_id=wave_id, children=[serialize_wave_node(child) for child in node.children])
+
+    @app.get("/api/waves/{wave_id}/rules", response_model=RuleXRayResponse)
+    def get_wave_rules(
+        wave_id: int,
+        limit: int = Query(config.lookback, ge=1, le=2000),
+        symbol: str = Query(config.symbol),
+        interval: str = Query(config.interval),
+    ) -> RuleXRayResponse:
+        df = _get_df(limit, symbol=symbol, interval=interval)
+        monowaves = detect_monowaves_from_df(df, retrace_threshold_price=config.min_price_retrace_ratio, retrace_threshold_time_ratio=config.min_time_ratio, similarity_threshold=config.similarity_threshold)
+        node = find_wave_node(monowaves, wave_id, rule_db=RULE_DB)
+        if not node:
+            raise HTTPException(status_code=404, detail="Wave not found")
+        return RuleXRayResponse(
+            wave_id=wave_id,
+            pattern_type=node.pattern_type,
+            pattern_subtype=node.pattern_subtype,
+            metrics=node.metrics,
+            validation=serialize_wave_node(node).get("validation"),
+        )
+
+    @app.post("/api/analyze/custom-range", response_model=ScenariosResponse)
+    def analyze_custom_range(payload: dict[str, Any] = Body(...)) -> ScenariosResponse:
+        symbol = payload.get("symbol", config.symbol)
+        interval = payload.get("interval", config.interval)
+        start_ts = payload.get("start_ts")
+        end_ts = payload.get("end_ts")
+        if start_ts is None or end_ts is None:
+            raise HTTPException(status_code=400, detail="start_ts and end_ts are required")
+        start_dt = pd.to_datetime(start_ts, unit="s", utc=True)
+        end_dt = pd.to_datetime(end_ts, unit="s", utc=True)
         if start_dt >= end_dt:
             raise HTTPException(status_code=400, detail="start_ts must be earlier than end_ts")
 
-        df = _get_df(config.lookback * 2, symbol=payload.symbol, interval=payload.interval)
+        df = _get_df(config.lookback * 2, symbol=symbol, interval=interval)
         df_slice = df[(df["timestamp"] >= start_dt) & (df["timestamp"] <= end_dt)].reset_index(drop=True)
         if df_slice.empty:
             raise HTTPException(status_code=400, detail="No candles in the requested range")
 
-        swings = detect_swings(
+        monowaves = detect_monowaves_from_df(
             df_slice,
-            price_threshold_pct=config.price_threshold_pct,
+            retrace_threshold_price=config.min_price_retrace_ratio,
+            retrace_threshold_time_ratio=config.min_time_ratio,
             similarity_threshold=config.similarity_threshold,
-            min_price_retrace_ratio=config.min_price_retrace_ratio,
-            min_time_ratio=config.min_time_ratio,
-            target_count_range=config.swing_count_range,
         )
-        rules = _load_rules_with_fallback()
-        current_price = float(df_slice["close"].iloc[-1]) if not df_slice.empty else None
-        scenarios = generate_scenarios(
-            swings,
-            rules,
-            max_pivots=payload.max_pivots or 5,
-            max_scenarios=payload.max_scenarios or 3,
-            current_price=current_price,
-            settings=ParseSettings(similarity_threshold=config.similarity_threshold),
-            scale_id="custom",
-            anchor_indices=[0],
-        )
-        anchors = identify_major_pivots(swings, max_pivots=payload.max_pivots or 5)
-        anchor_candidates = [
-            {"idx": idx, "start_time": swings[idx].start_time, "start_price": swings[idx].start_price} for idx in anchors if 0 <= idx < len(swings)
-        ]
-        return CustomRangeResponse(
-            scenarios=scenarios,
-            count=len(scenarios),
-            anchor_candidates=anchor_candidates,
-            candles=_serialize_candles(df_slice),
-            swings=[_serialize_swing(sw) for sw in swings],
-        )
+        target_wave_count = int(payload.get("target_wave_count", config.target_monowaves))
+        scenarios = generate_scenarios(monowaves, rule_db=RULE_DB, target_wave_count=target_wave_count)
+        return ScenariosResponse(scenarios=scenarios, count=len(scenarios))
 
     return app
 

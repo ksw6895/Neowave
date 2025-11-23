@@ -7,35 +7,12 @@ from dataclasses import dataclass, field
 DEFAULT_SYMBOL = "BTCUSD"
 DEFAULT_INTERVAL = "1hour"
 DEFAULT_LOOKBACK = 500
-DEFAULT_PRICE_THRESHOLD_PCT = 0.01  # 1% reversal threshold
-DEFAULT_SIMILARITY_THRESHOLD = 0.33  # Rule of Similarity baseline
-DEFAULT_MIN_PRICE_RETRACE_RATIO = 0.23  # NEoWave monowave retrace (price)
-DEFAULT_MIN_TIME_RATIO = 0.33  # NEoWave monowave retrace (time)
-DEFAULT_SWING_COUNT_RANGE = (15, 80)  # target count window for automatic tuning
+DEFAULT_PRICE_THRESHOLD_PCT = 0.01  # legacy; kept for compatibility
+DEFAULT_SIMILARITY_THRESHOLD = 0.33  # Rule of Similarity baseline (1/3)
+DEFAULT_MIN_PRICE_RETRACE_RATIO = 0.236  # NEoWave monowave retrace (price)
+DEFAULT_MIN_TIME_RATIO = 0.2  # NEoWave monowave retrace (time)
+DEFAULT_TARGET_MONOWAVES = 40  # Recommended visible swing count (30~60 band)
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3/historical-chart"
-SWING_SCALES = [
-    {
-        "id": "macro",
-        "price_threshold_pct": 0.025,
-        "similarity_threshold": 0.4,
-        "min_price_retrace_ratio": DEFAULT_MIN_PRICE_RETRACE_RATIO,
-        "min_time_ratio": DEFAULT_MIN_TIME_RATIO,
-    },
-    {
-        "id": "base",
-        "price_threshold_pct": DEFAULT_PRICE_THRESHOLD_PCT,
-        "similarity_threshold": DEFAULT_SIMILARITY_THRESHOLD,
-        "min_price_retrace_ratio": DEFAULT_MIN_PRICE_RETRACE_RATIO,
-        "min_time_ratio": DEFAULT_MIN_TIME_RATIO,
-    },
-    {
-        "id": "micro",
-        "price_threshold_pct": 0.005,
-        "similarity_threshold": 0.3,
-        "min_price_retrace_ratio": DEFAULT_MIN_PRICE_RETRACE_RATIO,
-        "min_time_ratio": DEFAULT_MIN_TIME_RATIO,
-    },
-]
 
 
 def _env_float(name: str, default: float) -> float:
@@ -69,8 +46,7 @@ class AnalysisConfig:
     similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD
     min_price_retrace_ratio: float = DEFAULT_MIN_PRICE_RETRACE_RATIO
     min_time_ratio: float = DEFAULT_MIN_TIME_RATIO
-    swing_count_range: tuple[int, int] = DEFAULT_SWING_COUNT_RANGE
-    swing_scales: list[dict[str, float]] = field(default_factory=lambda: [dict(scale) for scale in SWING_SCALES])
+    target_monowaves: int = DEFAULT_TARGET_MONOWAVES
 
     @classmethod
     def from_env(cls) -> "AnalysisConfig":
@@ -83,13 +59,5 @@ class AnalysisConfig:
             similarity_threshold=_env_float("SIMILARITY_THRESHOLD", DEFAULT_SIMILARITY_THRESHOLD),
             min_price_retrace_ratio=_env_float("MIN_PRICE_RETRACE_RATIO", DEFAULT_MIN_PRICE_RETRACE_RATIO),
             min_time_ratio=_env_float("MIN_TIME_RATIO", DEFAULT_MIN_TIME_RATIO),
-            swing_scales=[dict(scale) for scale in SWING_SCALES],
+            target_monowaves=_env_int("TARGET_MONOWAVES", DEFAULT_TARGET_MONOWAVES),
         )
-
-    def find_scale(self, scale_id: str | None) -> dict[str, float] | None:
-        if not scale_id:
-            return None
-        for scale in self.swing_scales:
-            if scale.get("id") == scale_id:
-                return scale
-        return None
