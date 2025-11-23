@@ -80,7 +80,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     logger.info("Using %s swings for scenario generation", len(swings))
 
-    scenarios = generate_scenarios(swings, rules, max_scenarios=args.max_scenarios)
+    current_price = float(df["close"].iloc[-1]) if not df.empty else None
+    scenarios = generate_scenarios(
+        swings,
+        rules,
+        max_scenarios=args.max_scenarios,
+        current_price=current_price,
+    )
     if not scenarios:
         print("No scenarios detected with current parameters.")
         return 0

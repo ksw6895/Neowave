@@ -42,6 +42,7 @@ def generate_scenarios(
     swings: Sequence[Swing],
     rules: dict[str, Any],
     max_scenarios: int = 5,
+    current_price: float | None = None,
 ) -> list[dict[str, Any]]:
     """Scan swing windows and produce ranked pattern scenarios."""
     scenarios: list[dict[str, Any]] = []
@@ -66,6 +67,17 @@ def generate_scenarios(
         "triple_three": 0.55,
     }
 
+    def is_invalid_now(invalidation: dict[str, float] | None) -> bool:
+        if invalidation is None or current_price is None:
+            return False
+        above = invalidation.get("price_above")
+        below = invalidation.get("price_below")
+        if above is not None and current_price >= above:
+            return True
+        if below is not None and current_price <= below:
+            return True
+        return False
+
     def add_scenario(
         pattern_type: str,
         score: float,
@@ -74,9 +86,12 @@ def generate_scenarios(
         invalidation: dict[str, float],
         details: dict[str, Any] | None = None,
     ) -> None:
+        if is_invalid_now(invalidation):
+            return
         base = pattern_type.split("_", 1)[0]
         weight = weights.get(base, 1.0)
         weighted_score = score * weight
+        in_progress = swing_indices[1] >= len(swings) - 1
         scenarios.append(
             {
                 "pattern_type": pattern_type,
@@ -86,6 +101,7 @@ def generate_scenarios(
                 "textual_summary": summary,
                 "invalidation_levels": invalidation,
                 "details": details or {},
+                "in_progress": in_progress,
             }
         )
 

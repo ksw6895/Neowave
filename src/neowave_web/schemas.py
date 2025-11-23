@@ -46,6 +46,7 @@ class ScenarioOut(BaseModel):
     textual_summary: str
     invalidation_levels: dict[str, float] | None = None
     details: dict[str, Any] | None = None
+    in_progress: bool | None = None
 
 
 class ScenariosResponse(BaseModel):

@@ -127,7 +127,13 @@ def create_app(
             similarity_threshold=similarity_threshold,
         )
         rules = _load_rules_with_fallback()
-        scenarios = generate_scenarios(swings, rules, max_scenarios=max_scenarios)
+        current_price = float(df["close"].iloc[-1]) if not df.empty else None
+        scenarios = generate_scenarios(
+            swings,
+            rules,
+            max_scenarios=max_scenarios,
+            current_price=current_price,
+        )
         return ScenariosResponse(scenarios=scenarios, count=len(scenarios))
 
     return app
