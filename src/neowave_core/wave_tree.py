@@ -17,6 +17,12 @@ class WaveNode:
     degree: int
     swing_start: int
     swing_end: int
+    start_price: float | None = None
+    end_price: float | None = None
+    start_time: Any | None = None
+    end_time: Any | None = None
+    high: float | None = None
+    low: float | None = None
     children: list["WaveNode"] = field(default_factory=list)
 
 
@@ -56,6 +62,12 @@ def _convert_node(node: ParsedWaveNode | None) -> WaveNode | None:
         degree=int(node.degree_level),
         swing_start=node.start_idx,
         swing_end=node.end_idx,
+        start_price=node.start_price,
+        end_price=node.end_price,
+        start_time=node.start_time,
+        end_time=node.end_time,
+        high=node.high,
+        low=node.low,
         children=children,
     )
 

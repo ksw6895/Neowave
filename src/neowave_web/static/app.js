@@ -107,6 +107,8 @@ function buildPathFromWaveTree(tree) {
   if (Number.isFinite(startTime) && Number.isFinite(startPrice)) {
     points.push({ time: startTime, value: startPrice });
   }
+  const endTime = toUnixSeconds(tree.end_time);
+  const endPrice = Number(tree.end_price);
   const children = Array.isArray(tree.sub_waves) ? tree.sub_waves : Array.isArray(tree.children) ? tree.children : [];
   children.forEach((child) => {
     const t = markerTimeFromNode(child);
@@ -115,6 +117,9 @@ function buildPathFromWaveTree(tree) {
       points.push({ time: t, value: v });
     }
   });
+  if (Number.isFinite(endTime) && Number.isFinite(endPrice)) {
+    points.push({ time: endTime, value: endPrice });
+  }
   const dedup = new Map();
   points.forEach((p) => {
     dedup.set(p.time, p.value);
