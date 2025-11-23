@@ -86,6 +86,7 @@ function flattenWaveMarkers(tree, depth = 0, markers = []) {
         const upMove = endVal >= startVal;
         markers.push({
           time,
+          value: priceValue,
           position: upMove ? "belowBar" : "aboveBar",
           color: ["#00f2ff", "#9b59b6", "#f39c12", "#1abc9c"][depth % 4],
           shape: "circle",
@@ -96,6 +97,27 @@ function flattenWaveMarkers(tree, depth = 0, markers = []) {
     flattenWaveMarkers(child, depth + 1, markers);
   });
   return markers;
+}
+
+function buildMarkersFromNodes(nodes) {
+  if (!Array.isArray(nodes)) return [];
+  return nodes
+    .map((node, idx) => {
+      const time = markerTimeFromNode(node);
+      const priceValue = Number(node.end_price ?? node.start_price ?? node.price_high ?? node.price_low);
+      if (!Number.isFinite(time) || !Number.isFinite(priceValue)) return null;
+      const startVal = Number(node.start_price ?? node.end_price ?? priceValue);
+      const upMove = Number.isFinite(startVal) ? priceValue >= startVal : true;
+      return {
+        time,
+        value: priceValue,
+        position: upMove ? "belowBar" : "aboveBar",
+        color: ["#00f2ff", "#9b59b6", "#f39c12", "#1abc9c"][idx % 4],
+        shape: "circle",
+        text: `${node.label} ${priceValue.toFixed(2)}`,
+      };
+    })
+    .filter(Boolean);
 }
 
 function buildWavePath(tree) {
@@ -290,7 +312,11 @@ function clearPriceLines() {
   if (!candleSeries) return;
   activePriceLines.forEach((line) => {
     if (line && typeof candleSeries.removePriceLine === "function") {
-      candleSeries.removePriceLine(line);
+      try {
+        candleSeries.removePriceLine(line);
+      } catch (err) {
+        console.warn("Failed to remove price line", err);
+      }
     }
   });
   activePriceLines = [];
@@ -358,9 +384,13 @@ function highlightScenario(scenario) {
   const waveTree = scenario.details && scenario.details.wave_tree;
   const hasWavePrice = waveTree && waveTree.end_price != null && waveTree.end_time;
   if (waveTree && hasWavePrice) {
-    const markers = flattenWaveMarkers(waveTree);
+    const directChildren = Array.isArray(waveTree.sub_waves) ? waveTree.sub_waves : Array.isArray(waveTree.children) ? waveTree.children : [];
+    let markers = buildMarkersFromNodes(directChildren);
+    if (!markers.length) {
+      markers = flattenWaveMarkers(waveTree);
+    }
     const path = markers
-      .map((m) => ({ time: m.time, value: Number(m.text?.split(" ").slice(-1)[0]) }))
+      .map((m) => ({ time: m.time, value: Number(m.value) }))
       .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value))
       .sort((a, b) => a.time - b.time);
     if (waveSeries) waveSeries.setData(path);
@@ -373,15 +403,16 @@ function highlightScenario(scenario) {
     const markers = subset
       .map((swing, idx) => ({
         time: swing.end_ts,
+        value: Number(swing.end_price),
         position: swing.direction === "up" ? "belowBar" : "aboveBar",
         color: swing.direction === "up" ? "#00f2ff" : "#ff0055",
         shape: swing.direction === "up" ? "arrowUp" : "arrowDown",
         text: `${labelsFromScenario[idx] || labels[idx] || "S"} ${Number(swing.end_price).toFixed(2)}`,
       }))
-      .filter((m) => Number.isFinite(m.time) && Number.isFinite(Number(m.text?.split(" ").slice(-1)[0])));
+      .filter((m) => Number.isFinite(m.time) && Number.isFinite(m.value));
     candleSeries.setMarkers(markers);
     const path = markers
-      .map((m) => ({ time: m.time, value: Number(m.text?.split(" ").slice(-1)[0]) }))
+      .map((m) => ({ time: m.time, value: Number(m.value) }))
       .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value))
       .sort((a, b) => a.time - b.time);
     if (waveSeries) waveSeries.setData(path);
