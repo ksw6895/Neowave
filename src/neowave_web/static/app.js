@@ -79,7 +79,7 @@ function flattenWaveMarkers(tree, depth = 0, markers = []) {
     const time = markerTimeFromNode(child);
     const priceValue = Number(child.end_price ?? child.start_price ?? child.price_high ?? child.price_low);
     if (time) {
-      const labelText = `${child.label} ${Number.isFinite(priceValue) ? priceValue.toFixed(2) : ""}`;
+      const labelText = `${child.label}${Number.isFinite(priceValue) ? ` ${priceValue.toFixed(2)}` : ""}`;
       const endVal = Number(child.end_price ?? child.start_price ?? 0);
       const startVal = Number(child.start_price ?? child.end_price ?? 0);
       if (Number.isFinite(priceValue) && Number.isFinite(endVal) && Number.isFinite(startVal)) {
@@ -288,7 +288,11 @@ function closeEvidenceModal() {
 
 function clearPriceLines() {
   if (!candleSeries) return;
-  activePriceLines.forEach((line) => candleSeries.removePriceLine(line));
+  activePriceLines.forEach((line) => {
+    if (line && typeof candleSeries.removePriceLine === "function") {
+      candleSeries.removePriceLine(line);
+    }
+  });
   activePriceLines = [];
 }
 
@@ -304,7 +308,7 @@ function drawInvalidations(levels) {
       axisLabelVisible: true,
       title: `Invalidation: ${label}`,
     });
-    activePriceLines.push(priceLine);
+    if (priceLine) activePriceLines.push(priceLine);
   });
 }
 
@@ -354,25 +358,30 @@ function highlightScenario(scenario) {
   const waveTree = scenario.details && scenario.details.wave_tree;
   const hasWavePrice = waveTree && waveTree.end_price != null && waveTree.end_time;
   if (waveTree && hasWavePrice) {
-    const path = buildWavePath(waveTree);
-    if (waveSeries) waveSeries.setData(path);
     const markers = flattenWaveMarkers(waveTree);
+    const path = markers
+      .map((m) => ({ time: m.time, value: Number(m.text?.split(" ").slice(-1)[0]) }))
+      .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value))
+      .sort((a, b) => a.time - b.time);
+    if (waveSeries) waveSeries.setData(path);
     candleSeries.setMarkers(markers);
   } else {
     const [startIdx, endIdx] = scenario.swing_indices || [0, -1];
     const subset = state.swings.slice(startIdx, endIdx + 1);
     const labels = scenarioWaveLabels(subset.length);
     const labelsFromScenario = Array.isArray(scenario.wave_labels) && scenario.wave_labels.length === subset.length ? scenario.wave_labels : labels;
-    const markers = subset.map((swing, idx) => ({
-      time: swing.end_ts,
-      position: swing.direction === "up" ? "belowBar" : "aboveBar",
-      color: swing.direction === "up" ? "#00f2ff" : "#ff0055",
-      shape: swing.direction === "up" ? "arrowUp" : "arrowDown",
-      text: `${labelsFromScenario[idx] || labels[idx] || "S"} ${Number(swing.end_price).toFixed(2)}`,
-    }));
+    const markers = subset
+      .map((swing, idx) => ({
+        time: swing.end_ts,
+        position: swing.direction === "up" ? "belowBar" : "aboveBar",
+        color: swing.direction === "up" ? "#00f2ff" : "#ff0055",
+        shape: swing.direction === "up" ? "arrowUp" : "arrowDown",
+        text: `${labelsFromScenario[idx] || labels[idx] || "S"} ${Number(swing.end_price).toFixed(2)}`,
+      }))
+      .filter((m) => Number.isFinite(m.time) && Number.isFinite(Number(m.text?.split(" ").slice(-1)[0])));
     candleSeries.setMarkers(markers);
-    const path = subset
-      .map((s) => ({ time: s.end_ts, value: Number(s.end_price) }))
+    const path = markers
+      .map((m) => ({ time: m.time, value: Number(m.text?.split(" ").slice(-1)[0]) }))
       .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value))
       .sort((a, b) => a.time - b.time);
     if (waveSeries) waveSeries.setData(path);
