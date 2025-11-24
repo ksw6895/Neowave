@@ -80,6 +80,8 @@ class ScenarioOut(BaseModel):
     global_score: float
     status: str
     invalidation_reasons: list[str] = Field(default_factory=list)
+    probability: float = 0.5
+    invalidation_levels: list[dict[str, Any]] = Field(default_factory=list)
     roots: list[WaveNodeOut]
     view_nodes: list[WaveNodeOut] = Field(default_factory=list)
     view_level: int = 0

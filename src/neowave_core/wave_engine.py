@@ -375,3 +375,90 @@ def find_node_by_id(root_nodes: Sequence[WaveNode], node_id: int) -> WaveNode | 
         if node.id == node_id:
             return node
     return None
+
+
+def verify_pattern(
+    macro_node: WaveNode,
+    micro_monowaves: Sequence[Monowave],
+    rule_db: dict[str, Any] | None = None,
+) -> PatternValidation:
+    """
+    Verify if the micro structure supports the macro pattern hypothesis.
+    
+    Args:
+        macro_node: The high-level node (e.g. Impulse) to verify.
+        micro_monowaves: The detailed monowaves covering the same period.
+        rule_db: Rules database.
+        
+    Returns:
+        PatternValidation result.
+    """
+    # 1. Slice micro waves to match macro node time range
+    # We assume micro_monowaves are sorted by time
+    start_time = macro_node.start_time
+    end_time = macro_node.end_time
+    
+    # Filter waves that fall within the macro node's duration
+    # We include waves that partially overlap if they are relevant?
+    # Strict containment is safer for verification.
+    subset = [
+        mw for mw in micro_monowaves 
+        if mw.start_time >= start_time and mw.end_time <= end_time
+    ]
+    
+    if not subset:
+        return PatternValidation(
+            hard_valid=False, 
+            soft_score=100.0, 
+            violated_hard_rules=["No micro data found for verification"]
+        )
+        
+    # 2. Analyze the subset
+    # We run the standard analysis on this subset
+    # Use a higher beam_width for verification as we are dealing with a smaller subset
+    # and want to ensure we find the correct pattern if it exists.
+    scenarios = analyze_market_structure(subset, rule_db=rule_db, beam_width=10)
+    
+    if not scenarios:
+        return PatternValidation(
+            hard_valid=False,
+            soft_score=100.0,
+            violated_hard_rules=["Analysis failed to find any valid structure"]
+        )
+        
+    best_scenario = scenarios[0]
+    
+    # 3. Check if the dominant pattern matches the macro hypothesis
+    # The best scenario might consist of multiple root nodes if it couldn't be collapsed into one.
+    # If macro_node is "Impulse", we expect the best scenario to be a single "Impulse" node
+    # OR a sequence that forms an Impulse (which analyze_market_structure should have collapsed).
+    
+    roots = best_scenario.root_nodes
+    
+    # If we have a single root, check its type
+    if len(roots) == 1:
+        root = roots[0]
+        if root.pattern_type == macro_node.pattern_type:
+            # Match!
+            # We can also check subtype if needed, but pattern_type is the main check.
+            return PatternValidation(
+                hard_valid=True,
+                soft_score=best_scenario.global_score,
+                satisfied_rules=[f"Micro structure confirms {macro_node.pattern_type}"]
+            )
+        else:
+            # Mismatch
+            return PatternValidation(
+                hard_valid=False,
+                soft_score=50.0 + best_scenario.global_score,
+                violated_hard_rules=[f"Expected {macro_node.pattern_type}, found {root.pattern_type}"]
+            )
+            
+    # If we have multiple roots, it means the engine couldn't collapse them into one pattern.
+    # This implies the macro hypothesis (that it IS one pattern) is likely wrong
+    # OR the micro view is too noisy/complex.
+    return PatternValidation(
+        hard_valid=False,
+        soft_score=80.0,
+        violated_hard_rules=[f"Micro structure did not form a single {macro_node.pattern_type} pattern (found {len(roots)} fragments)"]
+    )

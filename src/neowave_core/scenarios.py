@@ -47,6 +47,8 @@ def serialize_scenario(scenario: Scenario, target_wave_count: int = 40) -> dict[
         "global_score": scenario.global_score,
         "status": scenario.status,
         "invalidation_reasons": list(scenario.invalidation_reasons),
+        "probability": scenario.probability,
+        "invalidation_levels": scenario.invalidation_levels,
         "roots": [serialize_wave_node(root) for root in scenario.root_nodes],
         "view_nodes": [serialize_wave_node(node) for node in view_nodes],
         "view_level": view_nodes[0].level if view_nodes else 0,
@@ -60,6 +62,32 @@ def generate_scenarios(
     target_wave_count: int = 40,
 ) -> list[dict[str, Any]]:
     scenarios = analyze_market_structure(monowaves, rule_db=rule_db, beam_width=beam_width)
+    
+    # Post-process scenarios to add probability and invalidation levels
+    for sc in scenarios:
+        # Simple heuristic for probability: map score (0-100) to 0.0-1.0
+        # This is a placeholder for a more sophisticated model
+        sc.probability = min(max(sc.global_score / 100.0, 0.01), 0.99)
+        
+        # Invalidation levels
+        # For now, we add the start and end of the pattern as critical levels
+        if sc.root_nodes:
+            start_node = sc.root_nodes[0]
+            end_node = sc.root_nodes[-1]
+            
+            sc.invalidation_levels = [
+                {
+                    "price": start_node.start_price,
+                    "reason": "Pattern Start",
+                    "type": "hard"
+                },
+                {
+                    "price": end_node.end_price,
+                    "reason": "Pattern End",
+                    "type": "soft"
+                }
+            ]
+            
     return [serialize_scenario(sc, target_wave_count=target_wave_count) for sc in scenarios]
 
 

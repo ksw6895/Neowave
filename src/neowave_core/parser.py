@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Sequence
 
-from neowave_core.models import WaveNode, WaveTree, build_wave_leaves
+from neowave_core.models import WaveNode
 from neowave_core.patterns import (
     is_double_three,
     is_flat,

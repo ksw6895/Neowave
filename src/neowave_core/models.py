@@ -211,9 +211,14 @@ class WaveNode:
 class Scenario:
     id: int
     root_nodes: list[WaveNode]
-    global_score: float = 0.0
-    status: Literal["active", "invalidated", "completed"] = "active"
+    global_score: float
+    status: str = "active"  # active, invalidated, completed
     invalidation_reasons: list[str] = field(default_factory=list)
+    
+    # New fields for Phase 3
+    probability: float = 0.5
+    invalidation_levels: list[dict[str, Any]] = field(default_factory=list)
+    view_level: int = 0  # 0=Micro, 1=Macro
 
     def to_dict(self) -> dict[str, Any]:
         return {

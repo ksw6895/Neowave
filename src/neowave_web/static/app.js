@@ -8,6 +8,9 @@ const state = {
   candles: [],
   monowaves: [],
   scenarios: [],
+  selectedScenario: null,
+  invalidationLines: [],
+  verifyResult: null,
   chart: null,
   candleSeries: null,
   waveLine: null,
@@ -27,11 +30,77 @@ const elements = {
   retraceTimeInput: document.getElementById("input-retrace-time"),
   similarityInput: document.getElementById("input-similarity"),
   refreshBtn: document.getElementById("btn-refresh"),
+  verifyBtn: document.getElementById("btn-verify"),
+  verifyStatus: document.getElementById("verify-status"),
+  selectionLabel: document.getElementById("selection-label"),
   tooltip: document.getElementById("rule-tooltip"),
 };
 
 function setStatus(text) {
   elements.statusText.textContent = text;
+}
+
+function setVerifyResult(result) {
+  state.verifyResult = result;
+  const badge = elements.verifyStatus;
+  if (!badge) return;
+  badge.classList.remove("success", "fail");
+  if (!result) {
+    badge.style.display = "none";
+    badge.textContent = "";
+    return;
+  }
+  const success = result.error ? false : result.hard_valid === true;
+  badge.style.display = "inline-flex";
+  badge.classList.add(success ? "success" : "fail");
+  if (result.error) {
+    badge.textContent = `Fail · ${result.error}`;
+    return;
+  }
+  const violated = (result.violated_hard_rules || []).concat(result.violated_soft_rules || []);
+  badge.textContent = success
+    ? `Success · Score ${(result.soft_score ?? 0).toFixed(2)}`
+    : `Fail · ${violated[0] || "Hard rule breached"}`;
+}
+
+function updateSelectionLabel(scenario) {
+  if (!elements.selectionLabel) return;
+  if (!scenario) {
+    elements.selectionLabel.textContent = "Select a scenario";
+    return;
+  }
+  const label = scenario.roots?.map((r) => r.pattern_type || "Monowave").join(" · ") || "Scenario";
+  elements.selectionLabel.textContent = `${label} (#${scenario.id})`;
+}
+
+function clearInvalidationLines() {
+  if (!state.candleSeries) return;
+  state.invalidationLines.forEach((line) => {
+    try {
+      state.candleSeries.removePriceLine(line);
+    } catch (err) {
+      console.warn("Failed to remove price line", err);
+    }
+  });
+  state.invalidationLines = [];
+}
+
+function renderInvalidationLevels(levels = []) {
+  clearInvalidationLines();
+  if (!state.candleSeries || !Array.isArray(levels) || !levels.length) return;
+  const dashed = LightweightCharts.LineStyle ? LightweightCharts.LineStyle.Dashed : 2;
+  state.invalidationLines = levels
+    .filter((lvl) => Number.isFinite(Number(lvl.price)))
+    .map((lvl) =>
+      state.candleSeries.createPriceLine({
+        price: Number(lvl.price),
+        color: "#ff7f50",
+        lineWidth: 1,
+        lineStyle: dashed,
+        axisLabelVisible: true,
+        title: lvl.reason || "Invalidation",
+      }),
+    );
 }
 
 function toUnix(value) {
@@ -63,10 +132,15 @@ function buildChart() {
   });
 }
 
-async function fetchJSON(url, params = {}) {
-  const qs = new URLSearchParams(params).toString();
+async function fetchJSON(url, params = {}, options = {}) {
+  const { method = "GET", body } = options;
+  const qs = params && Object.keys(params).length ? new URLSearchParams(params).toString() : "";
   const target = qs ? `${url}?${qs}` : url;
-  const res = await fetch(target);
+  const res = await fetch(target, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -119,11 +193,19 @@ function renderMonowavePath() {
 }
 
 async function loadScenarios() {
-  const data = await fetchJSON("/api/scenarios", {
-    symbol: state.symbol,
-    interval: state.interval,
-    target_wave_count: state.targetWaves,
-  });
+  const data = await fetchJSON(
+    "/api/scan/macro",
+    {},
+    {
+      method: "POST",
+      body: {
+        symbol: state.symbol,
+        interval: state.interval,
+        limit: 600,
+        target_wave_count: state.targetWaves,
+      },
+    },
+  );
   state.scenarios = data.scenarios || [];
   elements.scenarioCount.textContent = state.scenarios.length;
 }
@@ -131,19 +213,40 @@ async function loadScenarios() {
 function renderScenarioCard(scenario) {
   const rootLabel = scenario.roots?.map((r) => r.pattern_type || "Monowave").join(" · ") || "n/a";
   const violations = scenario.invalidation_reasons || [];
+  const probability = Math.round((scenario.probability ?? 0.5) * 100);
+  const score = Number.isFinite(Number(scenario.global_score))
+    ? Number(scenario.global_score).toFixed(3)
+    : "-";
+  const viewNodes = scenario.view_nodes || [];
   const card = document.createElement("div");
   card.className = "scenario-card";
+  if (state.selectedScenario?.id === scenario.id) {
+    card.classList.add("active");
+  }
   card.innerHTML = `
-    <h3>${rootLabel}</h3>
-    <small>Score ${scenario.global_score.toFixed(3)} · Level ${scenario.view_level}</small>
-    <div style="margin-top:8px;">${(scenario.view_nodes || [])
+    <div class="scenario-meta">
+      <div>
+        <h3>${rootLabel}</h3>
+        <small>Score ${score} · Level ${scenario.view_level ?? "-"}</small>
+      </div>
+      <span class="probability-badge">P ${probability}%</span>
+    </div>
+    <div style="margin-top:8px;">${viewNodes
       .slice(0, 6)
       .map((node) => `<span class="badge" data-wave="${node.id}">${node.pattern_type || "Monowave"} #${node.id}</span>`)
       .join("")}</div>
-    <div class="validation">${violations.length ? `Invalidation: ${violations.join(", ")}` : "Top-down checks passed"}</div>
+    <div class="validation">${
+      violations.length
+        ? violations.map((reason) => `<span class="validation-badge danger">${reason}</span>`).join("")
+        : `<span class="validation-badge">Top-down checks passed</span>`
+    }</div>
   `;
+  card.addEventListener("click", () => selectScenario(scenario.id));
   card.querySelectorAll(".badge").forEach((el) => {
-    el.addEventListener("click", () => showRuleXRay(Number(el.dataset.wave)));
+    el.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      showRuleXRay(Number(el.dataset.wave));
+    });
   });
   return card;
 }
@@ -152,11 +255,28 @@ function renderScenarios() {
   elements.scenarioList.innerHTML = "";
   if (!state.scenarios.length) {
     elements.scenarioList.innerHTML = "<div class='pill'>No scenarios found. Adjust thresholds.</div>";
+    updateSelectionLabel(null);
+    renderInvalidationLevels([]);
+    if (elements.verifyBtn) {
+      elements.verifyBtn.disabled = true;
+    }
     return;
   }
   state.scenarios.forEach((sc) => {
     elements.scenarioList.appendChild(renderScenarioCard(sc));
   });
+}
+
+function selectScenario(scenarioId) {
+  const scenario = state.scenarios.find((sc) => sc.id === scenarioId) || null;
+  state.selectedScenario = scenario;
+  updateSelectionLabel(scenario);
+  renderInvalidationLevels(scenario?.invalidation_levels || []);
+  setVerifyResult(null);
+  if (elements.verifyBtn) {
+    elements.verifyBtn.disabled = !scenario;
+  }
+  renderScenarios();
 }
 
 async function showRuleXRay(waveId) {
@@ -192,6 +312,13 @@ async function runAnalysis() {
   state.retracePrice = Number(elements.retracePriceInput.value) || state.retracePrice;
   state.retraceTime = Number(elements.retraceTimeInput.value) || state.retraceTime;
   state.similarity = Number(elements.similarityInput.value) || state.similarity;
+  state.selectedScenario = null;
+  setVerifyResult(null);
+  updateSelectionLabel(null);
+  renderInvalidationLevels([]);
+  if (elements.verifyBtn) {
+    elements.verifyBtn.disabled = true;
+  }
 
   await loadCandles();
   await loadMonowaves();
@@ -202,12 +329,54 @@ async function runAnalysis() {
   setStatus("Updated");
 }
 
+async function verifySelected() {
+  const scenario = state.selectedScenario;
+  if (!scenario) return;
+  const macroNode = (scenario.view_nodes || [])[0] || (scenario.roots || [])[0];
+  if (!macroNode) {
+    setVerifyResult({ error: "No macro node selected" });
+    return;
+  }
+  try {
+    setStatus("Verifying...");
+    if (elements.verifyBtn) {
+      elements.verifyBtn.disabled = true;
+    }
+    const result = await fetchJSON(
+      "/api/verify/pattern",
+      {},
+      {
+        method: "POST",
+        body: {
+          macro_node: macroNode,
+          symbol: state.symbol,
+          interval: state.interval,
+          limit: 600,
+        },
+      },
+    );
+    setVerifyResult(result);
+    setStatus("Updated");
+  } catch (err) {
+    console.error(err);
+    setVerifyResult({ error: err.message || "Verification failed" });
+    setStatus("Error");
+  } finally {
+    if (elements.verifyBtn) {
+      elements.verifyBtn.disabled = !state.selectedScenario;
+    }
+  }
+}
+
 function bindEvents() {
   elements.targetInput.addEventListener("input", (e) => {
     const value = Number(e.target.value);
     elements.targetLabel.textContent = value;
   });
   elements.refreshBtn.addEventListener("click", () => runAnalysis().catch(console.error));
+  if (elements.verifyBtn) {
+    elements.verifyBtn.addEventListener("click", () => verifySelected().catch(console.error));
+  }
 }
 
 async function init() {

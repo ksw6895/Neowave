@@ -144,6 +144,57 @@
         position: relative;
         flex: 1;
       }
+      .panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .chart-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .selection-label {
+        padding: 6px 10px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      .btn-verify {
+        background: linear-gradient(120deg, #ff7f50, #f5a623);
+        color: #0a0e16;
+        border-radius: 12px;
+        padding: 10px 14px;
+        font-size: 12px;
+        border: none;
+        cursor: pointer;
+        box-shadow: 0 10px 30px rgba(255, 127, 80, 0.35);
+      }
+      .btn-verify:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+        box-shadow: none;
+      }
+      .verify-badge {
+        padding: 6px 10px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.04);
+        font-size: 12px;
+      }
+      .verify-badge.success {
+        color: #1abc9c;
+        border-color: rgba(26, 188, 156, 0.5);
+        background: rgba(26, 188, 156, 0.08);
+      }
+      .verify-badge.fail {
+        color: #ff7f50;
+        border-color: rgba(255, 127, 80, 0.5);
+        background: rgba(255, 127, 80, 0.08);
+      }
       #tv-chart {
         width: 100%;
         height: 100%;
@@ -159,6 +210,12 @@
         border-radius: 12px;
         padding: 12px;
         background: rgba(255, 255, 255, 0.02);
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        cursor: pointer;
+      }
+      .scenario-card.active {
+        border-color: rgba(56, 240, 196, 0.5);
+        box-shadow: 0 0 0 1px rgba(56, 240, 196, 0.15);
       }
       .scenario-card h3 {
         margin: 0 0 6px 0;
@@ -166,6 +223,21 @@
       }
       .scenario-card small {
         color: var(--muted);
+      }
+      .scenario-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .probability-badge {
+        padding: 6px 8px;
+        border-radius: 10px;
+        background: rgba(56, 240, 196, 0.12);
+        color: var(--accent);
+        font-family: var(--mono);
+        font-size: 11px;
+        border: 1px solid rgba(56, 240, 196, 0.4);
       }
       .badge {
         display: inline-flex;
@@ -179,6 +251,28 @@
         font-size: 11px;
         margin-right: 6px;
         margin-top: 4px;
+        border: 1px solid rgba(56, 240, 196, 0.25);
+      }
+      .validation-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px dashed rgba(255, 255, 255, 0.08);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .validation-badge.danger {
+        color: #ffb199;
+        border-color: rgba(255, 127, 80, 0.45);
+        background: rgba(255, 127, 80, 0.08);
+      }
+      .badge.invalid {
+        background: rgba(255, 127, 80, 0.12);
+        color: #ffb199;
+        border-color: rgba(255, 127, 80, 0.5);
       }
       .validation {
         margin-top: 8px;
@@ -267,7 +361,14 @@
         <div class="callout">Macro/Base/Micro 버튼 없이 하나의 프랙탈 트리에서 원하는 뷰 레벨을 선택합니다.</div>
       </section>
       <section class="panel chart-wrapper">
-        <h2>Chart</h2>
+        <div class="panel-header">
+          <h2>Chart</h2>
+          <div class="chart-actions">
+            <span class="selection-label" id="selection-label">Select a scenario</span>
+            <button id="btn-verify" class="btn-verify" disabled>Verify</button>
+            <span class="verify-badge" id="verify-status" style="display:none;">Pending</span>
+          </div>
+        </div>
         <div id="tv-chart"></div>
       </section>
       <section class="panel">

@@ -12,9 +12,9 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from neowave_core import AnalysisConfig, RULE_DB, detect_monowaves_from_df, fetch_ohlcv, generate_scenarios
+from neowave_core import AnalysisConfig, RULE_DB, detect_monowaves_from_df, fetch_ohlcv, generate_scenarios, MacroScanner, verify_pattern, WaveNode, Monowave
 from neowave_core.data_loader import DataLoaderError
-from neowave_core.scenarios import find_wave_node, serialize_wave_node
+from neowave_core.scenarios import find_wave_node, serialize_wave_node, serialize_scenario
 from neowave_web.schemas import CandleResponse, MonowaveResponse, RuleXRayResponse, ScenariosResponse, WaveChildrenResponse
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -229,6 +229,82 @@ def create_app(
         target_wave_count = int(payload.get("target_wave_count", config.target_monowaves))
         scenarios = generate_scenarios(monowaves, rule_db=RULE_DB, target_wave_count=target_wave_count)
         return ScenariosResponse(scenarios=scenarios, count=len(scenarios))
+
+    @app.post("/api/scan/macro", response_model=ScenariosResponse)
+    def scan_macro(
+        payload: dict[str, Any] = Body(...),
+    ) -> ScenariosResponse:
+        symbol = payload.get("symbol", config.symbol)
+        interval = payload.get("interval", config.interval)
+        limit = payload.get("limit", config.lookback)
+        target_wave_count = payload.get("target_wave_count", 12)
+        
+        df = _get_df(limit, symbol=symbol, interval=interval)
+        
+        scanner = MacroScanner(RULE_DB)
+        scenarios = scanner.scan(df, target_wave_count=target_wave_count)
+        
+        # Serialize scenarios
+        serialized = [serialize_scenario(sc) for sc in scenarios]
+        return ScenariosResponse(scenarios=serialized, count=len(serialized))
+
+    @app.post("/api/verify/pattern")
+    def verify_pattern_endpoint(
+        payload: dict[str, Any] = Body(...),
+    ) -> dict[str, Any]:
+        # Extract macro node and micro data params
+        macro_node_data = payload.get("macro_node")
+        if not macro_node_data:
+            raise HTTPException(status_code=400, detail="macro_node is required")
+            
+        symbol = payload.get("symbol", config.symbol)
+        interval = payload.get("interval", config.interval)
+        limit = payload.get("limit", config.lookback)
+        
+        # Reconstruct WaveNode from dict (simplified)
+        # In a real app, we might need a proper deserializer
+        # For now, we assume basic fields are present
+        try:
+            macro_node = WaveNode(
+                id=macro_node_data["id"],
+                level=macro_node_data["level"],
+                degree_label=macro_node_data.get("degree_label", ""),
+                start_idx=macro_node_data["start_idx"],
+                end_idx=macro_node_data["end_idx"],
+                start_time=pd.to_datetime(macro_node_data["start_time"]),
+                end_time=pd.to_datetime(macro_node_data["end_time"]),
+                start_price=macro_node_data["start_price"],
+                end_price=macro_node_data["end_price"],
+                high_price=macro_node_data["high_price"],
+                low_price=macro_node_data["low_price"],
+                direction=macro_node_data["direction"],
+                pattern_type=macro_node_data["pattern_type"],
+                children=[] # Children not needed for verification target
+            )
+        except KeyError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid macro_node data: missing {e}")
+
+        # Fetch micro data
+        df = _get_df(limit, symbol=symbol, interval=interval)
+        
+        # Detect micro monowaves
+        micro_monowaves = detect_monowaves_from_df(
+            df,
+            retrace_threshold_price=config.min_price_retrace_ratio,
+            retrace_threshold_time_ratio=config.min_time_ratio,
+            similarity_threshold=config.similarity_threshold,
+        )
+        
+        # Verify
+        validation = verify_pattern(macro_node, micro_monowaves, rule_db=RULE_DB)
+        
+        return {
+            "hard_valid": validation.hard_valid,
+            "soft_score": validation.soft_score,
+            "satisfied_rules": validation.satisfied_rules,
+            "violated_hard_rules": validation.violated_hard_rules,
+            "violated_soft_rules": validation.violated_soft_rules
+        }
 
     return app
 
